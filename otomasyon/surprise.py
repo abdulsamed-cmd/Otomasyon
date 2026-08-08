@@ -1,10 +1,8 @@
 """Weekly "surprise lab" - high-risk longshot candidates + system scenarios.
 
 Completely separate from the safe daily coupon. We shortlist candidate matches
-for three longshot categories:
+for one high-goal category:
 
-- ``htft_12``   : HT/FT 1/2 (home led at half, away won - away comeback)
-- ``htft_21``   : HT/FT 2/1 (away led at half, home won - home comeback)
 - ``goals_6plus``: 6+ total goals
 
 Ranking uses the market's fair (margin-free) probability of the target outcome:
@@ -34,6 +32,7 @@ class SurpriseCandidate:
     competition: str
     start_ts: int
     outcome_name: str
+    sov: str | None
     odd: float
     fair_prob: float
 
@@ -84,14 +83,25 @@ def find_candidates(
     now_ts: int,
     until_ts: int,
 ) -> list[SurpriseCandidate]:
-    market_code, outcome_name = config.SURPRISE_CATEGORIES[category]
+    market_code, outcome_name, line = config.SURPRISE_CATEGORIES[category]
     out: list[SurpriseCandidate] = []
     for ev in events:
         if not (now_ts < ev.start_ts <= until_ts):
             continue
         if not is_event_eligible(ev.competition_name, ev.home, ev.away):
             continue
-        market = ev.market(market_code)
+        market = next(
+            (
+                item
+                for item in ev.markets
+                if item.code == market_code
+                and (
+                    line is None
+                    or str(item.sov).replace(",", ".") == line
+                )
+            ),
+            None,
+        )
         if market is None or market.status != 1:
             continue
         res = _fair_for_outcome(market, outcome_name)
@@ -107,6 +117,7 @@ def find_candidates(
                 competition=ev.competition_name,
                 start_ts=ev.start_ts,
                 outcome_name=outcome_name,
+                sov=market.sov,
                 odd=odd,
                 fair_prob=fair,
             )

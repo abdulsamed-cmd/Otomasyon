@@ -122,6 +122,7 @@ def cmd_settle(args: argparse.Namespace) -> int:
 def cmd_metrics(args: argparse.Namespace) -> int:
     m = service.metrics(args.db)
     by_kind = service.metrics_by_kind(args.db)
+    goal_metrics = service.surprise_category_metrics(args.db)
     print("=== Performans metrikleri (düz 1 birim bahis) ===")
     print(f"  Sonuçlanan kupon : {m['coupons_played']} (toplam {m['coupons_total']})")
     print(f"  Tutan            : {m['won']}")
@@ -137,6 +138,13 @@ def cmd_metrics(args: argparse.Namespace) -> int:
             f"ROI %{item['roi']*100:+.1f} | "
             f"%95 %{item['roi_ci95'][0]*100:+.1f}.."
             f"%{item['roi_ci95'][1]*100:+.1f} | {status}"
+        )
+    print("\n=== Yüksek gol kategorileri ===")
+    for item in goal_metrics.values():
+        print(
+            f"  {'6+ Gol':10}: {item['candidates']} aday, "
+            f"{item['wins']} tutan, isabet %{item['hit_rate']*100:.1f}, "
+            f"ROI %{item['roi']*100:+.1f}"
         )
     return 0
 

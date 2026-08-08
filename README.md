@@ -1,7 +1,7 @@
 # Otomasyon
 
 İddaa futbol bülteninden **düşük riskli günlük kupon** üreten, ayrıca haftalık
-bir **"sürpriz laboratuvarı"** (İY/MS 1/2 · 2/1 ve 6+ gol adayları) çalıştıran
+bir **"6+ Gol laboratuvarı"** ve sistem senaryoları çalıştıran
 bir asistan. **Otomatik oynama yapmaz** — kupon hazırlar, Telegram'dan
 bilgilendirir ve sonuçları takip ederek performans metriklerini (isabet, ROI,
 ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
@@ -13,7 +13,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Veri kaynağı keşfi — iddaa genel JSON API (`sportsbookv2.iddaa.com`)
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
 - [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
-- [x] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
+- [x] Sürpriz modülü (6+ Gol, sistem senaryoları)
 - [x] Sürpriz aday/sonuç persistence + 2'li sistem teorik ROI kapısı
 - [x] Telegram botu (`bugün` / `sürpriz` / `kadro`, tek kullanıcı) + proaktif gönderim
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
@@ -129,6 +129,8 @@ Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/siste
 kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
 Her iki süreç de hazırlık, genç ve rezerv liglerinin yanında takım adındaki
 `II`, `B`, `2`, `Academy` ve `Uxx` rezerv işaretlerini dışlar.
+6+ Gol adayları ve sistem senaryoları günlük kuponlardan bağımsız ölçülür.
+Başka Alt/Üst çizgileri veya İY/MS seçimleri bu laboratuvara dahil edilmez.
 
 ### xG ve doğrulanmış kadro capture'ı
 

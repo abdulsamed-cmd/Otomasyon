@@ -89,8 +89,6 @@ def format_settlement(coupon: dict, settlement) -> str:
 
 
 _CATEGORY_TITLES = {
-    "htft_12": "İY/MS 1/2 (deplasman geri dönüşü)",
-    "htft_21": "İY/MS 2/1 (ev sahibi geri dönüşü)",
     "goals_6plus": "6+ Gol",
 }
 
@@ -98,10 +96,10 @@ _CATEGORY_TITLES = {
 def format_surprise(report) -> str:
     if not report.has_candidates:
         return (
-            "Sürpriz laboratuvarı henüz hazır değil.\n"
+            "Yüksek gol laboratuvarı henüz hazır değil.\n"
             "Uygun aday maç bulunamadı (bülten dar olabilir)."
         )
-    parts = ["SÜRPRİZ LABORATUVARI (yüksek risk, sistem)", ""]
+    parts = ["6+ GOL LABORATUVARI (yüksek risk, sistem)", ""]
     for category, cands in report.by_category.items():
         if not cands:
             continue
@@ -118,8 +116,9 @@ def format_surprise(report) -> str:
             f"SİSTEM SETİ ({len(report.system_set)} maç, farklı karşılaşmalar):"
         )
         for c in report.system_set:
+            selection = _CATEGORY_TITLES.get(c.category, c.outcome_name)
             parts.append(
-                f"  • [{_dm(c.start_ts)}] {c.match} — {c.outcome_name} @ {c.odd}"
+                f"  • [{_dm(c.start_ts)}] {c.match} — {selection} @ {c.odd}"
             )
         parts.append("")
         parts.append("Sistem senaryoları (teorik minimum maliyet):")

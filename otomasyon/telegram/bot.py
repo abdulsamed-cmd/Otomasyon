@@ -21,7 +21,7 @@ from .. import config
 HELP = (
     "Merhaba! Komutlar:\n"
     "• bugün — günün düşük riskli kuponları (ana + alternatif)\n"
-    "• sürpriz — sürpriz laboratuvarı (İY/MS 1/2·2/1, 6+ gol + sistem)\n\n"
+    "• sürpriz — 6+ Gol laboratuvarı ve sistem senaryoları\n\n"
     "• kadro — doğrulanmış ilk 11 rotasyon riskleri\n\n"
     "Not: Otomatik oynama yapılmaz; yalnızca bilgilendirme."
 )

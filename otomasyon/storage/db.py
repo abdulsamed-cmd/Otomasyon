@@ -324,14 +324,15 @@ class Database:
             for candidate in report.system_set
         }
         for category, candidates in report.by_category.items():
-            market_t, market_st = config.SURPRISE_CATEGORIES[category][0]
+            market_code, _, _ = config.SURPRISE_CATEGORIES[category]
+            market_t, market_st = market_code
             for candidate in candidates:
                 cur.execute(
                     """
                     INSERT INTO surprise_candidates
                         (report_id, event_id, category, market_t, market_st,
                          market_sov, outcome_name, odd, fair_prob, in_system)
-                    VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         report_id,
@@ -339,6 +340,7 @@ class Database:
                         category,
                         market_t,
                         market_st,
+                        candidate.sov,
                         candidate.outcome_name,
                         candidate.odd,
                         candidate.fair_prob,

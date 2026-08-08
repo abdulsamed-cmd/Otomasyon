@@ -70,19 +70,15 @@ LEG_MAX_ODD = 1.90
 COMBO_CAP = 64
 
 # --- Surprise lab ----------------------------------------------------------
-# Longshot categories, mapped to (market_code, outcome_name).
-# İY/MS 1/2 = home led at half, away won (away comeback);
-# İY/MS 2/1 = away led at half, home won (home comeback).
+# High-goal category, mapped to (market_code, outcome_name, line).
 SURPRISE_CATEGORIES = {
-    "htft_12": (MARKET_HTFT, "1/2"),
-    "htft_21": (MARKET_HTFT, "2/1"),
-    "goals_6plus": (MARKET_TOTAL_GOALS_BAND, "6+ gol"),
+    "goals_6plus": (MARKET_TOTAL_GOALS_BAND, "6+ gol", None),
 }
 # On-demand surprise scans a wider window (covers the upcoming weekend).
 SURPRISE_WINDOW_HOURS = 72
 # How many candidates per category to shortlist, and how many go into the
 # system-play set.
-SURPRISE_PER_CATEGORY = 3
+SURPRISE_PER_CATEGORY = 6
 SURPRISE_SYSTEM_SIZE = 6
 # Theoretical unit stake per column (TL) used to show minimum system cost.
 SURPRISE_UNIT_STAKE = 20.0

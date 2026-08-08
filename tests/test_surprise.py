@@ -15,19 +15,6 @@ NOW = datetime(2026, 8, 8, 12, 0, tzinfo=config.TIMEZONE)
 START = int(NOW.timestamp()) + 3600
 
 
-def _htft_event(eid: int, odd_12: float, odd_21: float) -> NormalizedEvent:
-    m = NormalizedMarket(
-        eid * 10, config.MARKET_HTFT[0], config.MARKET_HTFT[1],
-        "1. Yarı / Maç Sonucu", None, 1,
-        [
-            NormalizedSelection(1, "1/1", 3.0),
-            NormalizedSelection(3, "1/2", odd_12),
-            NormalizedSelection(7, "2/1", odd_21),
-        ],
-    )
-    return _wrap(eid, [m])
-
-
 def _goals_event(eid: int, odd_6plus: float) -> NormalizedEvent:
     m = NormalizedMarket(
         eid * 10, config.MARKET_TOTAL_GOALS_BAND[0], config.MARKET_TOTAL_GOALS_BAND[1],
@@ -52,24 +39,20 @@ def _wrap(eid: int, markets) -> NormalizedEvent:
 
 def test_finds_and_ranks_candidates():
     events = [
-        _htft_event(1, odd_12=9.0, odd_21=15.0),   # 1/2 more likely than event 2
-        _htft_event(2, odd_12=13.0, odd_21=21.0),
-        _goals_event(3, odd_6plus=7.0),
+        _goals_event(1, odd_6plus=5.0),
+        _goals_event(2, odd_6plus=7.0),
+        _goals_event(3, odd_6plus=9.0),
     ]
     report = surprise.build_surprise(events, now=NOW)
 
     assert report.has_candidates
-    twelve = report.by_category["htft_12"]
-    assert [c.event_id for c in twelve] == [1, 2]  # lower odd (event 1) ranks first
-    assert all(c.outcome_name == "1/2" for c in twelve)
-
     goals = report.by_category["goals_6plus"]
-    assert len(goals) == 1 and goals[0].outcome_name == "6+ gol"
+    assert [candidate.event_id for candidate in goals] == [1, 2, 3]
+    assert all(candidate.outcome_name == "6+ gol" for candidate in goals)
 
 
 def test_system_set_has_distinct_matches():
-    events = [_htft_event(i, 8.0 + i, 16.0 + i) for i in range(1, 5)]
-    events.append(_goals_event(9, 6.5))
+    events = [_goals_event(i, 5.0 + i) for i in range(1, 7)]
     report = surprise.build_surprise(events, now=NOW)
     ids = [c.event_id for c in report.system_set]
     assert len(ids) == len(set(ids))  # no match repeated
@@ -100,8 +83,8 @@ def test_system_scenarios_columns_and_cost():
 
 def test_surprise_reports_settle_separately_with_system_roi(tmp_path):
     events = [
-        _htft_event(1, 9.0, 15.0),
-        _htft_event(2, 10.0, 16.0),
+        _goals_event(1, 5.0),
+        _goals_event(2, 6.0),
         _goals_event(3, 7.0),
     ]
     report = surprise.build_surprise(events, now=NOW)
@@ -114,8 +97,8 @@ def test_surprise_reports_settle_separately_with_system_roi(tmp_path):
         report_id = db.save_surprise_report(
             report, "2026-W32", now=int(NOW.timestamp())
         )
-        db.save_result(MatchResult(1, 2, 3, 1, 0))
-        db.save_result(MatchResult(2, 2, 3, 1, 0))
+        db.save_result(MatchResult(1, 3, 3, 1, 0))
+        db.save_result(MatchResult(2, 4, 2, 1, 0))
         db.save_result(MatchResult(3, 4, 2, 2, 1))
     assert service.settle_surprise_reports(path) == 1
     with Database(path) as db:
@@ -134,10 +117,13 @@ def test_surprise_reports_settle_separately_with_system_roi(tmp_path):
     split = service.metrics_by_kind(path)
     assert split["surprise"]["coupons"] == 1
     assert split["surprise"]["gate_passed"] is False
+    categories = service.surprise_category_metrics(path)
+    assert categories["goals_6plus"]["candidates"] == 3
+    assert categories["goals_6plus"]["wins"] == 3
 
 
 def test_auto_results_includes_pending_surprise_candidates(tmp_path):
-    events = [_htft_event(1, 9.0, 15.0), _goals_event(3, 7.0)]
+    events = [_goals_event(1, 5.0), _goals_event(3, 7.0)]
     report = surprise.build_surprise(events, now=NOW)
     path = str(tmp_path / "auto-surprise.db")
     with Database(path) as db:

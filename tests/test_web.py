@@ -5,7 +5,7 @@ from otomasyon.storage import Database
 from otomasyon.web import create_app
 
 from .test_engine import NOW, _events
-from .test_surprise import _goals_event, _htft_event
+from .test_surprise import _goals_event
 from otomasyon import surprise
 
 
@@ -36,7 +36,7 @@ def _csrf(html: bytes) -> str:
 
 
 def _seed_surprise(path):
-    events = [_htft_event(51, 9.0, 14.0), _goals_event(52, 7.0)]
+    events = [_goals_event(51, 5.0), _goals_event(52, 7.0)]
     events[0].home = "PRIVATE SURPRISE TEAM"
     report = surprise.build_surprise(events, now=NOW)
     with Database(path) as db:

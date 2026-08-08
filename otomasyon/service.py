@@ -256,6 +256,41 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
     return output
 
 
+def surprise_category_metrics(db_path: str) -> dict[str, dict]:
+    """Track 4.5 Over and 6+ candidates independently as flat single picks."""
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT category, result, odd
+            FROM surprise_candidates
+            WHERE result IN ('win','lose')
+            """
+        ).fetchall()
+    output = {}
+    for category in config.SURPRISE_CATEGORIES:
+        selected = [row for row in rows if row["category"] == category]
+        profits = [
+            row["odd"] - 1.0 if row["result"] == "win" else -1.0
+            for row in selected
+        ]
+        output[category] = {
+            "candidates": len(selected),
+            "wins": sum(row["result"] == "win" for row in selected),
+            "hit_rate": (
+                sum(row["result"] == "win" for row in selected) / len(selected)
+                if selected
+                else 0.0
+            ),
+            "avg_odds": (
+                statistics.mean(row["odd"] for row in selected)
+                if selected
+                else 0.0
+            ),
+            "roi": statistics.mean(profits) if profits else 0.0,
+        }
+    return output
+
+
 def capture_shadow_predictions(
     db_path: str,
     *,
