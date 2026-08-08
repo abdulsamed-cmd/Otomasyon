@@ -13,7 +13,7 @@ import statistics
 from itertools import combinations
 from datetime import date, datetime, timedelta
 
-from . import config, engine, formatting, settlement, surprise
+from . import config, engine, formatting, probability, settlement, surprise
 from .iddaa import IddaaClient, MarketResolver, normalize_events
 from .iddaa.normalize import build_competitions_map
 from .storage import Database
@@ -47,13 +47,14 @@ def daily_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
     coupons = engine.build_daily_coupons(events, now=now)
     for_date = now.strftime("%Y-%m-%d")
 
-    if save and (coupons["main"] or coupons["alt"]):
+    if save:
         with Database(db_path) as db:
             db.upsert_competitions(competitions)
             db.save_events(events)
             for c in (coupons["main"], coupons["alt"]):
                 if c:
                     db.save_coupon(c, for_date)
+        capture_shadow_predictions(db_path, events=events, now=now)
     return formatting.format_daily(coupons, for_date)
 
 
@@ -255,6 +256,173 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
     return output
 
 
+def capture_shadow_predictions(
+    db_path: str,
+    *,
+    events=None,
+    now: datetime | None = None,
+) -> dict:
+    """Persist report-only xG O/U predictions without changing coupons."""
+    from .eligibility import is_event_eligible
+    from .model import GoalModel
+
+    now = now or datetime.now(tz=config.TIMEZONE)
+    now_ts = int(now.timestamp())
+    if events is None:
+        events, _ = get_live_events()
+    with Database(db_path) as db:
+        history = db.load_historical_matches(before_ts=now_ts)
+    model = GoalModel(history, now_ts, use_xg=True)
+    predictions = []
+    for event in events:
+        if not (now_ts < event.start_ts <= now_ts + 24 * 3600):
+            continue
+        if not is_event_eligible(
+            event.competition_name, event.home, event.away
+        ):
+            continue
+        market = next(
+            (
+                item
+                for item in event.markets
+                if item.code == config.MARKET_OVER_UNDER
+                and str(item.sov).replace(",", ".") == "2.5"
+                and item.status == 1
+            ),
+            None,
+        )
+        if market is None or len(market.selections) != 2:
+            continue
+        odds = market.odds
+        if not all(odd is not None and odd > 1.0 for odd in odds):
+            continue
+        prediction = model.predict(
+            event.home, event.away, event.competition_name
+        )
+        if (
+            prediction.xg_samples_home < 3
+            or prediction.xg_samples_away < 3
+        ):
+            continue
+        fair = probability.fair_probs(odds)
+        choices = []
+        for index, selection in enumerate(market.selections):
+            key = (
+                "Alt 2.5"
+                if selection.name == "Alt"
+                else "Üst 2.5"
+                if selection.name == "Üst"
+                else None
+            )
+            if key:
+                choices.append(
+                    (
+                        prediction.probs[key] - fair[index],
+                        index,
+                        selection,
+                        key,
+                    )
+                )
+        if not choices:
+            continue
+        edge, index, selection, key = max(choices)
+        predictions.append(
+            {
+                "model_version": config.MODEL_SHADOW_VERSION,
+                "for_date": now.strftime("%Y-%m-%d"),
+                "event_id": event.event_id,
+                "captured_ts": now_ts,
+                "market": "OU25",
+                "outcome_name": selection.name,
+                "odd": selection.odd,
+                "predicted_prob": prediction.probs[key],
+                "market_fair": fair[index],
+                "edge": edge,
+            }
+        )
+    with Database(db_path) as db:
+        saved = db.save_model_predictions(predictions)
+    return {
+        "eligible": len(predictions),
+        "saved": saved,
+        "model_version": config.MODEL_SHADOW_VERSION,
+        "live_enabled": False,
+    }
+
+
+def settle_shadow_predictions(db_path: str) -> int:
+    settled = 0
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT mp.id, mp.outcome_name, r.home_score, r.away_score,
+                   r.status
+            FROM model_predictions mp
+            JOIN results r ON r.event_id=mp.event_id
+            WHERE mp.result='pending'
+            """
+        ).fetchall()
+        for row in rows:
+            if row["status"] in ("postponed", "cancelled"):
+                outcome = "void"
+            elif row["home_score"] is None or row["away_score"] is None:
+                continue
+            else:
+                total = row["home_score"] + row["away_score"]
+                won = (
+                    row["outcome_name"] == "Alt" and total < 2.5
+                ) or (
+                    row["outcome_name"] == "Üst" and total > 2.5
+                )
+                outcome = "win" if won else "lose"
+            db.conn.execute(
+                "UPDATE model_predictions SET result=? WHERE id=?",
+                (outcome, row["id"]),
+            )
+            settled += 1
+        db.conn.commit()
+    return settled
+
+
+def shadow_model_metrics(db_path: str) -> dict:
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT * FROM model_predictions
+            WHERE model_version=? AND result IN ('win','lose')
+              AND edge>=?
+            """,
+            (config.MODEL_SHADOW_VERSION, config.MODEL_MIN_EDGE),
+        ).fetchall()
+    profits = [
+        row["odd"] - 1.0 if row["result"] == "win" else -1.0
+        for row in rows
+    ]
+    brier = [
+        (row["predicted_prob"] - (1.0 if row["result"] == "win" else 0.0))
+        ** 2
+        for row in rows
+    ]
+    roi = statistics.mean(profits) if profits else 0.0
+    margin = (
+        1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
+        if len(profits) > 1
+        else 0.0
+    )
+    return {
+        "model_version": config.MODEL_SHADOW_VERSION,
+        "predictions": len(rows),
+        "wins": sum(row["result"] == "win" for row in rows),
+        "roi": roi,
+        "roi_ci95": (roi - margin, roi + margin),
+        "brier": statistics.mean(brier) if brier else None,
+        "gate_passed": (
+            len(rows) >= config.MODEL_GATE_MIN_BETS and roi - margin > 0.0
+        ),
+        "live_enabled": False,
+    }
+
+
 def settle_surprise_reports(db_path: str) -> int:
     """Settle candidate outcomes and theoretical system returns."""
     settled_reports = 0
@@ -367,6 +535,7 @@ def auto_results(
             return {"skipped": True, "reason": "rate_limited", "matched": 0, "settled": 0}
         pending = db.get_pending_coupons()
         pending_surprise = db.pending_surprise_events()
+        pending_predictions = db.pending_model_prediction_events()
 
     targets_by_id: dict[int, dict] = {}
     for coupon in pending:
@@ -378,6 +547,13 @@ def auto_results(
                 "start_ts": leg["start_ts"],
             }
     for event in pending_surprise:
+        targets_by_id[event["event_id"]] = {
+            "event_id": event["event_id"],
+            "home": event["home"],
+            "away": event["away"],
+            "start_ts": event["start_ts"],
+        }
+    for event in pending_predictions:
         targets_by_id[event["event_id"]] = {
             "event_id": event["event_id"],
             "home": event["home"],
@@ -414,11 +590,13 @@ def auto_results(
         db_path, telegram_client, notify=telegram_client is not None
     )
     surprise_settled = settle_surprise_reports(db_path)
+    predictions_settled = settle_shadow_predictions(db_path)
     return {
         "skipped": False,
         "matched": len(matched),
         "settled": len(decided),
         "surprise_settled": surprise_settled,
+        "predictions_settled": predictions_settled,
         "dates": [day.isoformat() for day in days],
         "diagnostics": diagnostics,
     }
@@ -685,6 +863,53 @@ def backfill_prior_lineups(
         "fixtures": len(prior_fixtures),
         "lineups": sum(item.lineup_available for item in contexts),
         "xg": sum(item.xg_home is not None for item in contexts),
+        "errors": errors,
+    }
+
+
+def backfill_understat_xg(
+    db_path: str,
+    *,
+    seasons: list[int],
+    leagues: tuple[str, ...] | None = None,
+    client=None,
+) -> dict:
+    """Fetch bulk league xG and link it to existing historical results."""
+    from .understat import (
+        UNDERSTAT_LEAGUES,
+        UnderstatClient,
+        match_understat_history,
+    )
+
+    client = client or UnderstatClient()
+    leagues = leagues or UNDERSTAT_LEAGUES
+    fetched = []
+    errors = []
+    for season in seasons:
+        for league in leagues:
+            try:
+                fetched.extend(client.fetch_league(league, season))
+            except Exception as exc:
+                errors.append(
+                    {
+                        "scope": f"{league}/{season}",
+                        "error": str(exc),
+                    }
+                )
+    with Database(db_path) as db:
+        saved = db.save_understat_matches(fetched)
+        xg_rows = db.load_understat_matches()
+        history = db.load_historical_matches()
+        links, diagnostics = match_understat_history(xg_rows, history)
+        linked = db.save_historical_xg_links(links)
+    return {
+        "fetched": len(fetched),
+        "saved": saved,
+        "linked": linked,
+        "coverage": linked / len(fetched) if fetched else 0.0,
+        "unmatched": sum(
+            item["method"] == "unmatched" for item in diagnostics
+        ),
         "errors": errors,
     }
 

@@ -112,9 +112,13 @@ MODEL_MIN_EDGE = 0.04
 MODEL_ELO_K = 20.0
 MODEL_ELO_HOME_ADVANTAGE = 60.0
 MODEL_ELO_BLEND = 0.45
+# Blend observed goals with pre-existing match xG when available. xG belongs
+# only to training rows before the prediction cutoff.
+MODEL_XG_BLEND = 0.90
 # Safety gate: model remains report/backtest-only until explicitly enabled
 # after sufficient out-of-sample evidence.
 MODEL_LIVE_ENABLED = False
+MODEL_SHADOW_VERSION = "xg-ou-v1"
 MODEL_GATE_MIN_BETS = 200
 MODEL_GATE_MIN_ROI_CI_LOW = 0.0
 

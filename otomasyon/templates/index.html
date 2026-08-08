@@ -58,6 +58,17 @@
     </article>
     {% endfor %}
   </div>
+  <article class="shadow-card">
+    <div>
+      <p class="eyebrow">GÖLGE MODEL · CANLI ETKİSİ KAPALI</p>
+      <h3>{{ shadow.model_version }}</h3>
+      <p>Yalnız xG geçmişi yeterli takımların Alt/Üst 2.5 tahminleri ileriye dönük izlenir.</p>
+    </div>
+    <div class="shadow-stat"><b>{{ shadow.predictions }}</b><span>Sonuçlanan</span></div>
+    <div class="shadow-stat"><b>%{{ "%+.1f"|format(shadow.roi * 100) }}</b><span>ROI</span></div>
+    <div class="shadow-stat"><b>{{ "%.3f"|format(shadow.brier) if shadow.brier is not none else "—" }}</b><span>Brier</span></div>
+    <span class="gate {{ 'passed' if shadow.gate_passed else 'waiting' }}">{{ 'Geçti' if shadow.gate_passed else 'Kanıt bekliyor' }}</span>
+  </article>
 </section>
 
 <section class="history">

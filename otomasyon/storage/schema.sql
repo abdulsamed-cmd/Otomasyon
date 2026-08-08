@@ -123,6 +123,49 @@ CREATE INDEX IF NOT EXISTS idx_history_start ON historical_matches(start_ts);
 CREATE INDEX IF NOT EXISTS idx_history_home ON historical_matches(home_key, start_ts);
 CREATE INDEX IF NOT EXISTS idx_history_away ON historical_matches(away_key, start_ts);
 
+CREATE TABLE IF NOT EXISTS understat_matches (
+    source_id     TEXT PRIMARY KEY,
+    league        TEXT NOT NULL,
+    season        INTEGER NOT NULL,
+    start_ts      INTEGER NOT NULL,
+    home          TEXT NOT NULL,
+    away          TEXT NOT NULL,
+    ft_home       INTEGER NOT NULL,
+    ft_away       INTEGER NOT NULL,
+    xg_home       REAL NOT NULL,
+    xg_away       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_understat_start ON understat_matches(start_ts);
+
+CREATE TABLE IF NOT EXISTS historical_xg_links (
+    understat_source_id  TEXT PRIMARY KEY,
+    historical_source_id TEXT NOT NULL UNIQUE,
+    match_score          REAL NOT NULL,
+    FOREIGN KEY (understat_source_id)
+        REFERENCES understat_matches(source_id) ON DELETE CASCADE,
+    FOREIGN KEY (historical_source_id)
+        REFERENCES historical_matches(source_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS model_predictions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_version   TEXT NOT NULL,
+    for_date        TEXT NOT NULL,
+    event_id        INTEGER NOT NULL,
+    captured_ts     INTEGER NOT NULL,
+    market          TEXT NOT NULL,
+    outcome_name    TEXT NOT NULL,
+    odd             REAL NOT NULL,
+    predicted_prob  REAL NOT NULL,
+    market_fair     REAL NOT NULL,
+    edge            REAL NOT NULL,
+    result          TEXT NOT NULL DEFAULT 'pending',
+    UNIQUE (model_version, for_date, event_id, market),
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_model_predictions_status
+    ON model_predictions(model_version, result);
+
 CREATE TABLE IF NOT EXISTS clubelo_ratings (
     rating_date  TEXT NOT NULL,
     club_key     TEXT NOT NULL,

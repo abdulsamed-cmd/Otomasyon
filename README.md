@@ -23,6 +23,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Bağlamsal gol modeli + opponent-adjusted Elo + pazar bazlı kronolojik backtest
 - [x] İstatistiksel ROI kabul kapısı + bağımsız ClubElo rapor/validasyon katmanı
 - [x] FotMob xG/doğrulanmış kadro capture katmanı (rapor modu)
+- [x] Understat toplu tarihsel xG + `xg-ou-v1` ileriye dönük gölge model
 - [x] Açık performans / şifreli kupon detaylı responsive web dashboard
 - [x] Docker Compose ile kalıcı disk, bot ve dashboard servisleri
 - [ ] Bağlamsal capture sonuçlarını biriktirme ve pozitif holdout kanıtı
@@ -50,6 +51,9 @@ python3 -m otomasyon.cli coupon-replay --start 2026-03-01 --end 2026-03-31 \
 python3 -m otomasyon.cli fotmob-context --detail-window 2 --detail-limit 30
 python3 -m otomasyon.cli fotmob-lineup-backfill --per-team 1
 python3 -m otomasyon.cli lineup-risk --high-rotation 5
+python3 -m otomasyon.cli xg-backfill --season 2024 --season 2025
+python3 -m otomasyon.cli shadow-predict
+python3 -m otomasyon.cli shadow-metrics
 python3 -m gunicorn --bind 0.0.0.0:8080 otomasyon.web:app
 ```
 
@@ -141,6 +145,21 @@ Oyuncu kimlikleri, pozisyonları ve mevcut piyasa değerleri ayrıca saklanır.
 Önceki resmi maçın ilk 11'iyle devamlılık karşılaştırması yapılır; beş veya
 daha fazla değişiklik şimdilik yalnız `kadro` komutunda risk uyarısı üretir ve
 kupon seçimini değiştirmez.
+
+### Tarihsel xG ve gölge model
+
+Understat'ın cookie gerektiren güncel `/getLeagueData/{league}/{season}` JSON
+endpoint'i EPL, La Liga, Bundesliga, Serie A, Ligue 1 ve RFPL sezonlarını toplu
+alır. Maçlar Mackolik geçmişine saat, iki takım adı ve kesin skorla bağlanır.
+2024/25 ve 2025/26 verilerinden 3.984 xG maçı çekilmiş, mevcut tarih aralığıyla
+1.889 güvenli bağlantı kurulmuştur.
+
+`xg-ou-v1`, yalnız cutoff öncesinde iki takım için de yeterli xG geçmişi varsa
+Alt/Üst 2.5 tahmini kaydeder. Mart validasyonunda gol-only model ROI'sini
+`-%15,6` seviyesinden xG ağırlıklı sürümde `-%3,4` seviyesine iyileştirmiştir;
+ancak %95 güven aralığı sıfırın altına indiği için canlı seçim etkisi kapalıdır.
+Günlük üretim sırasında tahminler `model_predictions` tablosuna gölge kayıt
+olarak yazılır ve sonuç/ROI/Brier ileriye dönük takip edilir.
 
 ## Web dashboard
 

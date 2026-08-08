@@ -189,14 +189,25 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     with Database(args.db) as db:
         history = db.load_historical_matches()
     report = backtest(
-        history, test_days=args.test_days, test_end_date=args.test_end
+        history,
+        test_days=args.test_days,
+        test_end_date=args.test_end,
+        use_xg=not args.no_xg,
+        xg_covered_only=args.xg_covered_only,
+        markets=set(args.market) if args.market else None,
     )
     if report.get("error"):
         print("Backtest yapılamadı:", report["error"])
         return 1
     print("=== Kronolojik model backtest (rapor modu) ===")
     print(f"  Eğitim maçı     : {report['train_matches']}")
+    print(
+        f"  xG eğitim maçı  : {report['xg_train_matches']} "
+        f"({'AÇIK' if report['xg_enabled'] else 'KAPALI'})"
+    )
     print(f"  Test maçı       : {report['test_matches']}")
+    if report["xg_covered_only"]:
+        print("  Test kapsamı    : iki takımda da eğitimden ≥3 xG maçı")
     print(f"  Değer seçimi    : {report['bets']}")
     print(f"  Kazanan         : {report['wins']}")
     print(f"  İsabet          : %{report['hit_rate'] * 100:.1f}")
@@ -213,7 +224,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     for market, values in report["market_breakdown"].items():
         print(
             f"  {market:15}: {values['bets']} seçim, "
-            f"{values['wins']} kazanan, ROI %{values['roi'] * 100:.1f}"
+            f"{values['wins']} kazanan, ROI %{values['roi'] * 100:.1f} "
+            f"(%95 %{values['roi_ci95'][0]*100:.1f}.."
+            f"%{values['roi_ci95'][1]*100:.1f})"
         )
     print(
         "  Kabul kapısı     : "
@@ -392,6 +405,52 @@ def cmd_lineup_risk(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_xg_backfill(args: argparse.Namespace) -> int:
+    from .understat import UNDERSTAT_LEAGUES
+
+    leagues = tuple(args.league) if args.league else UNDERSTAT_LEAGUES
+    report = service.backfill_understat_xg(
+        args.db,
+        seasons=args.season,
+        leagues=leagues,
+    )
+    print("=== Understat tarihsel xG backfill ===")
+    print(
+        f"Çekilen {report['fetched']}, kaydedilen {report['saved']}, "
+        f"geçmişle eşleşen {report['linked']} "
+        f"(%{report['coverage']*100:.1f})"
+    )
+    for error in report["errors"]:
+        print(f"  {error['scope']}: {error['error']}")
+    return 0 if not report["errors"] else 1
+
+
+def cmd_shadow_predict(args: argparse.Namespace) -> int:
+    report = service.capture_shadow_predictions(args.db)
+    print(
+        f"Gölge model {report['model_version']}: "
+        f"{report['eligible']} uygun tahmin, {report['saved']} yeni kayıt"
+    )
+    print("Canlı kupon etkisi: KAPALI")
+    return 0
+
+
+def cmd_shadow_metrics(args: argparse.Namespace) -> int:
+    report = service.shadow_model_metrics(args.db)
+    print(f"=== Gölge model: {report['model_version']} ===")
+    print(
+        f"Tahmin {report['predictions']}, kazanan {report['wins']}, "
+        f"ROI %{report['roi']*100:.1f}, "
+        f"%95 %{report['roi_ci95'][0]*100:.1f}.."
+        f"%{report['roi_ci95'][1]*100:.1f}"
+    )
+    print(
+        f"Brier {report['brier'] if report['brier'] is not None else '—'} | "
+        f"Kapı {'GEÇTİ' if report['gate_passed'] else 'BEKLİYOR'}"
+    )
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -495,6 +554,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_backtest.add_argument(
         "--test-end", help="Inclusive holdout end date (YYYY-MM-DD)"
     )
+    p_backtest.add_argument("--no-xg", action="store_true")
+    p_backtest.add_argument("--xg-covered-only", action="store_true")
+    p_backtest.add_argument(
+        "--market", action="append", choices=("1X2", "OU25")
+    )
     p_backtest.set_defaults(func=cmd_backtest)
 
     p_clubelo = sub.add_parser(
@@ -553,6 +617,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_risk.add_argument("--high-rotation", type=int, default=5)
     p_risk.set_defaults(func=cmd_lineup_risk)
+
+    p_xg = sub.add_parser(
+        "xg-backfill", help="Fetch and link bulk Understat league xG"
+    )
+    p_xg.add_argument("--season", type=int, action="append", required=True)
+    p_xg.add_argument("--league", action="append")
+    p_xg.set_defaults(func=cmd_xg_backfill)
+
+    p_shadow = sub.add_parser(
+        "shadow-predict", help="Capture report-only xG O/U predictions"
+    )
+    p_shadow.set_defaults(func=cmd_shadow_predict)
+
+    p_shadow_metrics = sub.add_parser(
+        "shadow-metrics", help="Report settled xG shadow predictions"
+    )
+    p_shadow_metrics.set_defaults(func=cmd_shadow_metrics)
     return parser
 
 

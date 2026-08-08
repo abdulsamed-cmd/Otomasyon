@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from . import config, probability
-from .eligibility import is_daily_eligible
+from .eligibility import is_event_eligible
 from .results.matcher import normalize_team
 
 
@@ -33,6 +33,8 @@ class GoalPrediction:
     samples_away: int
     elo_home: float
     elo_away: float
+    xg_samples_home: int
+    xg_samples_away: int
     probs: dict[str, float]
 
 
@@ -46,15 +48,20 @@ def _poisson_probs(lam: float, max_goals: int = 10) -> list[float]:
 
 
 class GoalModel:
-    def __init__(self, history: list[dict], cutoff_ts: int) -> None:
+    def __init__(
+        self, history: list[dict], cutoff_ts: int, *, use_xg: bool = True
+    ) -> None:
         earliest = cutoff_ts - config.MODEL_LOOKBACK_DAYS * 86400
         self.history = [
             row
             for row in history
             if earliest <= row["start_ts"] < cutoff_ts
-            and is_daily_eligible(row.get("competition") or "")
+            and is_event_eligible(
+                row.get("competition") or "", row["home"], row["away"]
+            )
         ]
         self.cutoff_ts = cutoff_ts
+        self.use_xg = use_xg
         self._fit()
 
     def _fit(self) -> None:
@@ -67,28 +74,51 @@ class GoalModel:
         for row in sorted(self.history, key=lambda item: item["start_ts"]):
             age_days = max(0.0, (self.cutoff_ts - row["start_ts"]) / 86400)
             weight = math.exp(-ln2 * age_days / config.MODEL_HALF_LIFE_DAYS)
+            has_xg = (
+                self.use_xg
+                and row.get("xg_home") is not None
+                and row.get("xg_away") is not None
+            )
+            if has_xg:
+                home_signal = (
+                    (1.0 - config.MODEL_XG_BLEND) * row["ft_home"]
+                    + config.MODEL_XG_BLEND * row["xg_home"]
+                )
+                away_signal = (
+                    (1.0 - config.MODEL_XG_BLEND) * row["ft_away"]
+                    + config.MODEL_XG_BLEND * row["xg_away"]
+                )
+            else:
+                home_signal, away_signal = row["ft_home"], row["ft_away"]
             global_weight += weight
-            global_home += weight * row["ft_home"]
-            global_away += weight * row["ft_away"]
+            global_home += weight * home_signal
+            global_away += weight * away_signal
             competition = row.get("competition") or ""
             comp = competitions.setdefault(
                 competition, {"weight": 0.0, "home": 0.0, "away": 0.0}
             )
             comp["weight"] += weight
-            comp["home"] += weight * row["ft_home"]
-            comp["away"] += weight * row["ft_away"]
+            comp["home"] += weight * home_signal
+            comp["away"] += weight * away_signal
             for key, venue, scored, conceded in (
-                (row["home_key"], "home", row["ft_home"], row["ft_away"]),
-                (row["away_key"], "away", row["ft_away"], row["ft_home"]),
+                (row["home_key"], "home", home_signal, away_signal),
+                (row["away_key"], "away", away_signal, home_signal),
             ):
                 item = stats.setdefault(
                     (key, venue),
-                    {"weight": 0.0, "scored": 0.0, "conceded": 0.0, "n": 0},
+                    {
+                        "weight": 0.0,
+                        "scored": 0.0,
+                        "conceded": 0.0,
+                        "n": 0,
+                        "xg_n": 0,
+                    },
                 )
                 item["weight"] += weight
                 item["scored"] += weight * scored
                 item["conceded"] += weight * conceded
                 item["n"] += 1
+                item["xg_n"] += int(has_xg)
 
             home_key, away_key = row["home_key"], row["away_key"]
             home_rating = elo.get(home_key, 1500.0)
@@ -143,24 +173,24 @@ class GoalModel:
         venue: str,
         baseline_scored: float,
         baseline_conceded: float,
-    ) -> tuple[float, float, int]:
+    ) -> tuple[float, float, int, int]:
         item = self.stats.get((normalize_team(team), venue))
         if not item:
-            return baseline_scored, baseline_conceded, 0
+            return baseline_scored, baseline_conceded, 0, 0
         prior = config.MODEL_PRIOR_MATCHES
         denominator = item["weight"] + prior
         attack = (item["scored"] + prior * baseline_scored) / denominator
         defense = (item["conceded"] + prior * baseline_conceded) / denominator
-        return attack, defense, item["n"]
+        return attack, defense, item["n"], item["xg_n"]
 
     def predict(
         self, home: str, away: str, competition: str | None = None
     ) -> GoalPrediction:
         league_home, league_away = self._competition_rates(competition)
-        home_attack, home_defense, home_n = self._team_rates(
+        home_attack, home_defense, home_n, home_xg_n = self._team_rates(
             home, "home", league_home, league_away
         )
-        away_attack, away_defense, away_n = self._team_rates(
+        away_attack, away_defense, away_n, away_xg_n = self._team_rates(
             away, "away", league_away, league_home
         )
         # Opponent-adjusted multiplicative attack/defence strengths.
@@ -206,6 +236,8 @@ class GoalModel:
             samples_away=away_n,
             elo_home=home_elo,
             elo_away=away_elo,
+            xg_samples_home=home_xg_n,
+            xg_samples_away=away_xg_n,
             probs=probs,
         )
 
@@ -261,6 +293,9 @@ def backtest(
     *,
     test_days: int = 14,
     test_end_date: str | None = None,
+    use_xg: bool = True,
+    xg_covered_only: bool = False,
+    markets: set[str] | None = None,
 ) -> dict:
     """Chronological holdout backtest using only information before cutoff."""
     if not history:
@@ -288,9 +323,24 @@ def backtest(
         row
         for row in history
         if cutoff <= row["start_ts"] < end_ts
-        and is_daily_eligible(row.get("competition") or "")
+        and is_event_eligible(
+            row.get("competition") or "", row["home"], row["away"]
+        )
     ]
-    model = GoalModel(train, cutoff)
+    if xg_covered_only:
+        xg_team_counts = Counter()
+        for row in train:
+            if row.get("xg_home") is None or row.get("xg_away") is None:
+                continue
+            xg_team_counts[row["home_key"]] += 1
+            xg_team_counts[row["away_key"]] += 1
+        test = [
+            row
+            for row in test
+            if xg_team_counts[row["home_key"]] >= 3
+            and xg_team_counts[row["away_key"]] >= 3
+        ]
+    model = GoalModel(train, cutoff, use_xg=use_xg)
 
     bets = []
     market_favourite_bets = []
@@ -345,6 +395,7 @@ def backtest(
             if config.LEG_MIN_ODD <= c[1] <= config.LEG_MAX_ODD
             and c[2] >= config.MODEL_MIN_EDGE
             and pred.confidence >= 0.35
+            and (markets is None or c[3] in markets)
         ]
         if not candidates:
             continue
@@ -378,13 +429,24 @@ def backtest(
     market_breakdown = {}
     for market in ("1X2", "OU25"):
         selected = [bet for bet in bets if bet["market"] == market]
+        market_profits = [bet["profit"] for bet in selected]
+        market_roi = (
+            statistics.mean(market_profits) if market_profits else 0.0
+        )
+        market_margin = (
+            1.96
+            * statistics.stdev(market_profits)
+            / math.sqrt(len(market_profits))
+            if len(market_profits) > 1
+            else 0.0
+        )
         market_breakdown[market] = {
             "bets": len(selected),
             "wins": sum(bet["won"] for bet in selected),
-            "roi": (
-                statistics.mean(bet["profit"] for bet in selected)
-                if selected
-                else 0.0
+            "roi": market_roi,
+            "roi_ci95": (
+                market_roi - market_margin,
+                market_roi + market_margin,
             ),
         }
 
@@ -394,6 +456,13 @@ def backtest(
     )
     return {
         "train_matches": len(train),
+        "xg_train_matches": sum(
+            row.get("xg_home") is not None and row.get("xg_away") is not None
+            for row in train
+        ),
+        "xg_enabled": use_xg,
+        "xg_covered_only": xg_covered_only,
+        "markets": sorted(markets) if markets else ["1X2", "OU25"],
         "test_matches": len(test),
         "bets": len(bets),
         "wins": sum(bet["won"] for bet in bets),

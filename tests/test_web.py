@@ -63,6 +63,7 @@ def test_public_dashboard_exposes_metrics_but_not_coupon_details(tmp_path):
     response = app.test_client().get("/")
     assert response.status_code == 200
     assert b"G\xc3\xbcnl\xc3\xbck ana" in response.data
+    assert b"xg-ou-v1" in response.data
     assert b"PRIVATE HOME TEAM" not in response.data
     assert response.headers["X-Frame-Options"] == "DENY"
 

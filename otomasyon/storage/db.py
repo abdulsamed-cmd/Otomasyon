@@ -439,14 +439,128 @@ class Database:
     ) -> list[dict]:
         clauses, params = [], []
         if before_ts is not None:
-            clauses.append("start_ts < ?")
+            clauses.append("hm.start_ts < ?")
             params.append(before_ts)
         if after_ts is not None:
-            clauses.append("start_ts >= ?")
+            clauses.append("hm.start_ts >= ?")
             params.append(after_ts)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         rows = self.conn.execute(
-            f"SELECT * FROM historical_matches{where} ORDER BY start_ts", params
+            f"""
+            SELECT hm.*, um.xg_home, um.xg_away,
+                   um.league AS xg_league
+            FROM historical_matches hm
+            LEFT JOIN historical_xg_links xl
+                ON xl.historical_source_id=hm.source_id
+            LEFT JOIN understat_matches um
+                ON um.source_id=xl.understat_source_id
+            {where}
+            ORDER BY hm.start_ts
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_understat_matches(self, matches) -> int:
+        rows = [
+            (
+                item.source_id,
+                item.league,
+                item.season,
+                item.start_ts,
+                item.home,
+                item.away,
+                item.ft_home,
+                item.ft_away,
+                item.xg_home,
+                item.xg_away,
+            )
+            for item in matches
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO understat_matches
+                (source_id, league, season, start_ts, home, away,
+                 ft_home, ft_away, xg_home, xg_away)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                league=excluded.league, season=excluded.season,
+                start_ts=excluded.start_ts, home=excluded.home, away=excluded.away,
+                ft_home=excluded.ft_home, ft_away=excluded.ft_away,
+                xg_home=excluded.xg_home, xg_away=excluded.xg_away
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def load_understat_matches(self) -> list[dict]:
+        return [
+            dict(row)
+            for row in self.conn.execute(
+                "SELECT * FROM understat_matches ORDER BY start_ts"
+            ).fetchall()
+        ]
+
+    def save_historical_xg_links(self, links: list[dict]) -> int:
+        rows = [
+            (
+                item["understat_source_id"],
+                item["historical_source_id"],
+                item["match_score"],
+            )
+            for item in links
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO historical_xg_links
+                (understat_source_id, historical_source_id, match_score)
+            VALUES (?, ?, ?)
+            ON CONFLICT(understat_source_id) DO UPDATE SET
+                historical_source_id=excluded.historical_source_id,
+                match_score=excluded.match_score
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def save_model_predictions(self, predictions: list[dict]) -> int:
+        before = self.conn.total_changes
+        self.conn.executemany(
+            """
+            INSERT OR IGNORE INTO model_predictions
+                (model_version, for_date, event_id, captured_ts, market,
+                 outcome_name, odd, predicted_prob, market_fair, edge)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    item["model_version"],
+                    item["for_date"],
+                    item["event_id"],
+                    item["captured_ts"],
+                    item["market"],
+                    item["outcome_name"],
+                    item["odd"],
+                    item["predicted_prob"],
+                    item["market_fair"],
+                    item["edge"],
+                )
+                for item in predictions
+            ],
+        )
+        self.conn.commit()
+        return self.conn.total_changes - before
+
+    def pending_model_prediction_events(self) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT mp.event_id, e.home, e.away, e.start_ts
+            FROM model_predictions mp
+            JOIN events e ON e.id=mp.event_id
+            WHERE mp.result='pending'
+            """
         ).fetchall()
         return [dict(row) for row in rows]
 

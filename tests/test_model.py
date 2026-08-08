@@ -39,6 +39,22 @@ def test_goal_model_learns_team_strength_and_valid_probabilities():
     assert pred.samples_home == 20 and pred.samples_away == 20
 
 
+def test_xg_blend_uses_only_available_training_rows():
+    history = [_row(i) for i in range(20)]
+    for row in history:
+        row["xg_home"] = 0.8
+        row["xg_away"] = 1.5
+    cutoff = history[-1]["start_ts"] + 86400
+    goals_only = GoalModel(history, cutoff, use_xg=False).predict(
+        "Alpha", "Beta"
+    )
+    with_xg = GoalModel(history, cutoff, use_xg=True).predict("Alpha", "Beta")
+    assert with_xg.home_lambda < goals_only.home_lambda
+    assert with_xg.away_lambda > goals_only.away_lambda
+    assert with_xg.xg_samples_home == 20
+    assert with_xg.xg_samples_away == 20
+
+
 def test_chronological_backtest_uses_holdout_and_reports_roi():
     history = [_row(i) for i in range(45)]
     report = backtest(history, test_days=10)

@@ -101,10 +101,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/")
     def index():
         metrics = service.metrics_by_kind(app.config["DB_PATH"])
+        shadow = service.shadow_model_metrics(app.config["DB_PATH"])
         with Database(app.config["DB_PATH"]) as db:
             recent = db.dashboard_coupon_summaries(limit=12, settled_only=True)
         # Public output deliberately contains no event/team/selection fields.
-        return render_template("index.html", metrics=metrics, recent=recent)
+        return render_template(
+            "index.html", metrics=metrics, shadow=shadow, recent=recent
+        )
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
