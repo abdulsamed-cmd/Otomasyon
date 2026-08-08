@@ -134,7 +134,13 @@ class Bot:
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
         while True:
             try:
-                self.poll_once(poll_timeout)
+                poll_failed = False
+                try:
+                    self.poll_once(poll_timeout)
+                except Exception as exc:
+                    poll_failed = True
+                    print(f"Bot hata (devam ediliyor): {exc}")
+
                 self._maybe_scheduled_push()
                 if self.result_callback is not None:
                     report = self.result_callback()
@@ -150,6 +156,8 @@ class Bot:
                             f"Bağlamsal capture: {report['matched']} maç eşleşti, "
                             f"{report['prematch_lineups']} maç önü kadro"
                         )
+                if poll_failed:
+                    time.sleep(3)
             except KeyboardInterrupt:  # pragma: no cover
                 print("Bot durduruluyor.")
                 return

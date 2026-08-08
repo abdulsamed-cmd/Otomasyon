@@ -1,4 +1,5 @@
 from otomasyon.storage import Database
+from otomasyon.telegram import bot as bot_module
 from otomasyon.telegram.bot import Bot, HELP
 
 
@@ -78,3 +79,51 @@ def test_poll_once_sends_reply_and_advances_offset():
     assert sent == 1
     assert client.sent == [(42, "DAILY")]
     assert bot._offset == 11
+
+
+def test_poll_error_does_not_skip_result_or_context_callbacks(monkeypatch):
+    class FailingPollClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.polls = 0
+
+        def get_updates(self, offset=None, timeout=25):
+            self.polls += 1
+            if self.polls == 1:
+                raise TimeoutError("getUpdates timed out")
+            raise KeyboardInterrupt
+
+    callback_calls = []
+    bot = Bot(
+        FailingPollClient(),
+        "AbdulsamedErden",
+        on_daily=lambda: "DAILY",
+        on_surprise=lambda: "SURPRISE",
+        result_callback=lambda: callback_calls.append("result"),
+        context_callback=lambda: callback_calls.append("context"),
+    )
+    monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
+
+    bot.run(poll_timeout=0)
+
+    assert callback_calls == ["result", "context"]
+
+
+def test_keyboard_interrupt_stops_before_scheduled_callbacks():
+    class InterruptedPollClient(FakeClient):
+        def get_updates(self, offset=None, timeout=25):
+            raise KeyboardInterrupt
+
+    callback_calls = []
+    bot = Bot(
+        InterruptedPollClient(),
+        "AbdulsamedErden",
+        on_daily=lambda: "DAILY",
+        on_surprise=lambda: "SURPRISE",
+        result_callback=lambda: callback_calls.append("result"),
+        context_callback=lambda: callback_calls.append("context"),
+    )
+
+    bot.run(poll_timeout=0)
+
+    assert callback_calls == []
