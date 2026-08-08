@@ -967,6 +967,7 @@ class Database:
                     "kind": c["kind"],
                     "status": c["status"],
                     "for_date": c["for_date"],
+                    "notes": c["notes"],
                     "legs": [
                         {
                             "result": leg["result"],

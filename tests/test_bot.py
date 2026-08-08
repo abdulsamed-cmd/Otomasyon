@@ -101,12 +101,14 @@ def test_poll_error_does_not_skip_result_or_context_callbacks(monkeypatch):
         on_surprise=lambda: "SURPRISE",
         result_callback=lambda: callback_calls.append("result"),
         context_callback=lambda: callback_calls.append("context"),
+        history_callback=lambda: callback_calls.append("history"),
+        model_status_callback=lambda: callback_calls.append("model"),
     )
     monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
 
     bot.run(poll_timeout=0)
 
-    assert callback_calls == ["result", "context"]
+    assert callback_calls == ["model", "result", "context", "history"]
 
 
 def test_keyboard_interrupt_stops_before_scheduled_callbacks():

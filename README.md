@@ -96,6 +96,14 @@ Bu tam günlük arşiv kupon dışındaki resmi maçları da model eğitimine ek
 Hazırlık, genç ve rezerv kayıtları ham veride bulunsa bile eğitim filtresinden
 geçemez.
 
+Başarılı gece arşivi Telegram'da tarih, kaynak maç sayısı, toplam tarihsel
+veri ve yeniden denenecek gün sayısıyla bir kez bildirilir. Gönderim başarısız
+olursa tarih bildirilmiş sayılmaz ve sonraki bot döngüsünde yeniden denenir.
+
+Her gün `09:45`te, `10:00` kuponundan önce ayrı bir model sağlık bildirimi
+gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
+6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.
+
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri
 lisansı/izin değerlendirmesi yapılmalıdır.

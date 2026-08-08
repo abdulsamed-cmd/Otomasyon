@@ -38,6 +38,17 @@ class ArchiveClient:
         ]
 
 
+class Telegram:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.sent = []
+
+    def send_message(self, chat_id, text):
+        if self.fail:
+            raise RuntimeError("telegram unavailable")
+        self.sent.append((chat_id, text))
+
+
 def test_nightly_archive_saves_all_recent_days_and_rate_limits(tmp_path):
     path = str(tmp_path / "archive.db")
     now = datetime(2026, 8, 8, 5, tzinfo=config.TIMEZONE)
@@ -83,3 +94,48 @@ def test_archive_waits_until_configured_local_hour(tmp_path):
     )
     assert report["skipped"] is True
     assert report["reason"] == "before_archive_hour"
+
+
+def test_archive_success_notification_is_once_and_retryable(tmp_path):
+    path = str(tmp_path / "archive.db")
+    now = datetime(2026, 8, 8, 5, tzinfo=config.TIMEZONE)
+    with Database(path) as db:
+        db.set_setting("telegram_chat_id", "123")
+    service.auto_history_archive(
+        path, now=now, force=True, result_client=ArchiveClient()
+    )
+    failing = Telegram(fail=True)
+    try:
+        service.notify_completed_history_archives(path, failing, now=now)
+    except RuntimeError:
+        pass
+    with Database(path) as db:
+        assert db.get_setting("history_archive_notified:2026-08-07") is None
+
+    telegram = Telegram()
+    notified = service.notify_completed_history_archives(
+        path, telegram, now=now
+    )
+    assert len(notified) == config.HISTORY_ARCHIVE_RETRY_DAYS
+    assert "GECE VERİ ARŞİVİ TAMAMLANDI" in telegram.sent[0][1]
+    assert service.notify_completed_history_archives(
+        path, telegram, now=now
+    ) == []
+
+
+def test_model_status_push_runs_once_after_0945(tmp_path):
+    path = str(tmp_path / "status.db")
+    with Database(path) as db:
+        db.set_setting("telegram_chat_id", "123")
+    telegram = Telegram()
+    early = datetime(2026, 8, 8, 9, 44, tzinfo=config.TIMEZONE)
+    assert service.push_model_status(path, telegram, now=early) is None
+    due = datetime(2026, 8, 8, 9, 45, tzinfo=config.TIMEZONE)
+    assert service.push_model_status(path, telegram, now=due) == "123"
+    assert "09:45 MODEL / PERFORMANS DURUMU" in telegram.sent[0][1]
+    assert "ROI" in telegram.sent[0][1]
+    assert "CLV" in telegram.sent[0][1]
+    assert service.push_model_status(path, telegram, now=due) is None
+
+    next_day_late = datetime(2026, 8, 9, 11, 0, tzinfo=config.TIMEZONE)
+    assert service.push_model_status(path, telegram, now=next_day_late) is None

@@ -74,6 +74,21 @@ def test_settle_pending_marks_lost(tmp_path):
     assert m["won"] == 0 and m["roi"] == -1.0
 
 
+def test_legacy_ineligible_coupons_are_excluded_from_metrics(tmp_path):
+    path = str(tmp_path / "t.db")
+    _seed(path)
+    service.record_result(path, MatchResult(1, 1, 1))
+    service.record_result(path, MatchResult(2, 2, 0))
+    service.settle_pending(path, notify=False)
+    with Database(path) as db:
+        db.conn.execute(
+            "UPDATE coupons SET notes='legacy_ineligible'"
+        )
+        db.conn.commit()
+    assert service.metrics(path)["coupons_played"] == 0
+    assert service.metrics_by_kind(path)["daily_main"]["coupons"] == 0
+
+
 class FakeResultClient:
     def __init__(self):
         self.days = []

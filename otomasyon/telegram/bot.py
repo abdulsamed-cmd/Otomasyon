@@ -51,6 +51,7 @@ class Bot:
         result_callback: Callable[[], object] | None = None,
         context_callback: Callable[[], object] | None = None,
         history_callback: Callable[[], object] | None = None,
+        model_status_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -63,6 +64,7 @@ class Bot:
         self.result_callback = result_callback
         self.context_callback = context_callback
         self.history_callback = history_callback
+        self.model_status_callback = model_status_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -143,6 +145,15 @@ class Bot:
                     poll_failed = True
                     print(f"Bot hata (devam ediliyor): {exc}")
 
+                if self.model_status_callback is not None:
+                    try:
+                        result = self.model_status_callback()
+                        if result:
+                            print(
+                                f"Model sağlık raporu gönderildi -> chat {result}"
+                            )
+                    except Exception as exc:
+                        print(f"Model sağlık raporu hatası: {exc}")
                 self._maybe_scheduled_push()
                 if self.result_callback is not None:
                     try:

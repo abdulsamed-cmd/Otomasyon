@@ -75,7 +75,8 @@ def cmd_bot(args: argparse.Namespace) -> int:
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
-        history_callback=lambda: service.auto_history_archive(args.db),
+        history_callback=lambda: service.archive_and_notify(args.db, client),
+        model_status_callback=lambda: service.push_model_status(args.db, client),
     )
     bot.run()
     return 0
@@ -204,6 +205,19 @@ def cmd_history_auto(args: argparse.Namespace) -> int:
     for error in report["errors"]:
         print(f"  {error['date']}: {error['error']}")
     return 0 if not report["errors"] else 1
+
+
+def cmd_model_status(args: argparse.Namespace) -> int:
+    text = service.model_status_text(args.db)
+    print(text)
+    if args.notify:
+        from .telegram import TelegramClient
+
+        chat_id = service.push_model_status(
+            args.db, TelegramClient(), force=True
+        )
+        print("Telegram bildirimi gönderildi." if chat_id else "Chat bulunamadı.")
+    return 0
 
 
 def cmd_backtest(args: argparse.Namespace) -> int:
@@ -594,6 +608,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_history_auto.add_argument("--force", action="store_true")
     p_history_auto.set_defaults(func=cmd_history_auto)
+
+    p_model_status = sub.add_parser(
+        "model-status", help="Print or send the 09:45 model health report"
+    )
+    p_model_status.add_argument("--notify", action="store_true")
+    p_model_status.set_defaults(func=cmd_model_status)
 
     p_backtest = sub.add_parser(
         "backtest", help="Run chronological contextual-model backtest"

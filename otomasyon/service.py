@@ -133,6 +133,11 @@ def metrics(db_path: str) -> dict:
     with Database(db_path) as db:
         coupons = db.settled_coupons()
 
+    coupons = [
+        coupon
+        for coupon in coupons
+        if coupon.get("notes") != "legacy_ineligible"
+    ]
     played = [c for c in coupons if c["status"] in ("won", "lost")]
     won = [c for c in played if c["status"] == "won"]
     staked = float(len(played))
@@ -164,6 +169,11 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
     """Independent performance and evidence gates for each coupon process."""
     with Database(db_path) as db:
         coupons = db.settled_coupons()
+    coupons = [
+        coupon
+        for coupon in coupons
+        if coupon.get("notes") != "legacy_ineligible"
+    ]
     output = {}
     kinds = set(config.PERFORMANCE_GATE_MIN_COUPONS) | {
         coupon["kind"] for coupon in coupons
@@ -761,6 +771,174 @@ def auto_history_archive(
         "rows": saved_rows,
         "errors": errors,
     }
+
+
+def notify_completed_history_archives(
+    db_path: str,
+    telegram_client,
+    *,
+    now: datetime | None = None,
+) -> list[str]:
+    """Notify once per successfully archived date; retry sends on failure."""
+    now = now or datetime.now(tz=config.TIMEZONE)
+    with Database(db_path) as db:
+        chat_id = db.get_setting("telegram_chat_id")
+        if not chat_id:
+            return []
+        archived = db.conn.execute(
+            """
+            SELECT key, value FROM app_settings
+            WHERE key GLOB 'history_archive:????-??-??'
+            ORDER BY key
+            """
+        ).fetchall()
+        pending = [
+            (row["key"].split(":", 1)[1], int(row["value"]))
+            for row in archived
+            if db.get_setting(
+                f"history_archive_notified:{row['key'].split(':', 1)[1]}"
+            )
+            is None
+        ]
+        if not pending:
+            return []
+        missing = 0
+        for offset in range(1, config.HISTORY_ARCHIVE_RETRY_DAYS + 1):
+            day = now.date() - timedelta(days=offset)
+            if db.get_setting(f"history_archive:{day.isoformat()}") is None:
+                missing += 1
+        historical_total = db.count("historical_matches")
+    dates = [day for day, _ in pending]
+    rows = sum(count for _, count in pending)
+    text = "\n".join(
+        [
+            "GECE VERİ ARŞİVİ TAMAMLANDI",
+            f"Arşivlenen tarih: {', '.join(dates)}",
+            f"Kaynak maç kaydı: {rows}",
+            f"Toplam tarihsel veri: {historical_total} maç",
+            f"Yeniden denenecek gün: {missing}",
+            "Yeni veriler bir sonraki model eğitiminde kullanılacak.",
+        ]
+    )
+    telegram_client.send_message(chat_id, text)
+    with Database(db_path) as db:
+        for day in dates:
+            db.set_setting(f"history_archive_notified:{day}", str(int(now.timestamp())))
+    return dates
+
+
+def archive_and_notify(
+    db_path: str,
+    telegram_client,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    result_client=None,
+) -> dict:
+    now = now or datetime.now(tz=config.TIMEZONE)
+    report = auto_history_archive(
+        db_path,
+        now=now,
+        force=force,
+        result_client=result_client,
+    )
+    report["notified_days"] = notify_completed_history_archives(
+        db_path, telegram_client, now=now
+    )
+    return report
+
+
+def model_status_text(db_path: str) -> str:
+    processes = metrics_by_kind(db_path)
+    shadow = shadow_model_metrics(db_path)
+    goals = surprise_category_metrics(db_path)["goals_6plus"]
+    lines = ["09:45 MODEL / PERFORMANS DURUMU"]
+    labels = {
+        "daily_main": "Ana kupon",
+        "daily_alt": "Alternatif",
+    }
+    for kind in ("daily_main", "daily_alt"):
+        item = processes[kind]
+        clv = (
+            f"{item['avg_clv']*100:+.1f}% ({item['clv_samples']})"
+            if item["avg_clv"] is not None
+            else "veri yok"
+        )
+        lines.extend(
+            [
+                "",
+                f"{labels[kind]} — {item['coupons']}/{item['minimum_coupons']} sonuç",
+                (
+                    f"ROI {item['roi']*100:+.1f}% "
+                    f"[95% {item['roi_ci95'][0]*100:+.1f}%.."
+                    f"{item['roi_ci95'][1]*100:+.1f}%]"
+                ),
+                f"CLV: {clv} | Kapı: {'GEÇTİ' if item['gate_passed'] else 'BEKLİYOR'}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            f"xG gölge ({shadow['model_version']}) — {shadow['predictions']}/"
+            f"{config.MODEL_GATE_MIN_BETS} sonuç",
+            (
+                f"ROI {shadow['roi']*100:+.1f}% "
+                f"[95% {shadow['roi_ci95'][0]*100:+.1f}%.."
+                f"{shadow['roi_ci95'][1]*100:+.1f}%]"
+            ),
+            (
+                f"Brier: {shadow['brier']:.3f}"
+                if shadow["brier"] is not None
+                else "Brier: veri yok"
+            ),
+            f"Kapı: {'GEÇTİ' if shadow['gate_passed'] else 'BEKLİYOR'}",
+            "",
+            (
+                f"6+ Gol — {goals['candidates']} sonuç, "
+                f"isabet %{goals['hit_rate']*100:.1f}, "
+                f"ROI {goals['roi']*100:+.1f}%"
+            ),
+            "",
+            "10:00 kuponları yalnız kendi mevcut kurallarıyla üretilecektir.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def push_model_status(
+    db_path: str,
+    telegram_client,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+) -> str | None:
+    """Send one model-health report before the daily coupon push."""
+    now = now or datetime.now(tz=config.TIMEZONE)
+    scheduled = now.replace(
+        hour=config.MODEL_STATUS_PUSH_HOUR,
+        minute=config.MODEL_STATUS_PUSH_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    deadline = now.replace(
+        hour=config.DAILY_PUSH_HOUR + 1,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if not force and (now < scheduled or now >= deadline):
+        return None
+    today = now.strftime("%Y-%m-%d")
+    with Database(db_path) as db:
+        chat_id = db.get_setting("telegram_chat_id")
+        if not chat_id:
+            return None
+        if not force and db.get_setting("last_model_status_date") == today:
+            return None
+    telegram_client.send_message(chat_id, model_status_text(db_path))
+    with Database(db_path) as db:
+        db.set_setting("last_model_status_date", today)
+    return chat_id
 
 
 def backfill_clubelo(
