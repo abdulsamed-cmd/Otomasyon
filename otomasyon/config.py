@@ -55,6 +55,20 @@ DAILY_MAX_TOTAL_ODDS = 3.00
 DAILY_MIN_LEGS = 2
 DAILY_MAX_LEGS = 4
 
+# A leg is only "safe" enough for the daily coupon if its fair (margin-free)
+# probability clears this floor.
+LEG_MIN_FAIR_PROB = 0.55
+# Match Result (1X2) is riskier, so only allow it for a strong favourite.
+FAVORITE_MIN_FAIR_PROB = 0.60
+# Only legs whose odds sit in this band are useful for building a 2-4 leg
+# coupon inside the 2.00-3.00 window: below the floor a leg barely moves the
+# product; the ceiling keeps individual legs reasonably safe.
+LEG_MIN_ODD = 1.20
+LEG_MAX_ODD = 1.90
+# Triples/quads are searched over the top-N safest legs (perf guard). Pairs are
+# always searched over the full pool so good higher-odd pairs are never missed.
+COMBO_CAP = 64
+
 
 def telegram_bot_token() -> str | None:
     """Telegram bot token, read from the environment (never committed)."""

@@ -142,6 +142,40 @@ class Database:
         self.conn.commit()
         return stats
 
+    def save_coupon(self, coupon, for_date: str, *, now: int | None = None) -> int:
+        """Persist a generated coupon and its legs; returns the coupon id.
+
+        Coupons are stored so results can be settled and notified later.
+        """
+        now = now or int(time.time())
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO coupons
+                (kind, created_ts, for_date, total_odds, combined_prob, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+            """,
+            (coupon.kind, now, for_date, coupon.total_odds, coupon.combined_prob),
+        )
+        coupon_id = cur.lastrowid
+        for leg in coupon.legs:
+            cur.execute(
+                """
+                INSERT INTO coupon_legs
+                    (coupon_id, event_id, market_t, market_st, market_sov,
+                     market_name, outcome_no, outcome_name, odd_at_creation,
+                     fair_prob)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    coupon_id, leg.event_id, leg.market_code[0], leg.market_code[1],
+                    leg.sov, leg.market_name, leg.outcome_no, leg.outcome_name,
+                    leg.odd, leg.fair_prob,
+                ),
+            )
+        self.conn.commit()
+        return coupon_id
+
     # -- reads --------------------------------------------------------------
     def count(self, table: str) -> int:
         # table name is internal/controlled, not user input
