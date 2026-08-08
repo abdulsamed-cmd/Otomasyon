@@ -47,6 +47,7 @@ class Bot:
         push_hour: int | None = None,
         push_callback: Callable[[], object] | None = None,
         result_callback: Callable[[], object] | None = None,
+        context_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -56,6 +57,7 @@ class Bot:
         self.push_hour = push_hour
         self.push_callback = push_callback
         self.result_callback = result_callback
+        self.context_callback = context_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -135,6 +137,13 @@ class Bot:
                         print(
                             f"Sonuç taraması: {report['matched']} maç eşleşti, "
                             f"{report['settled']} kupon kapandı ve bildirildi"
+                        )
+                if self.context_callback is not None:
+                    report = self.context_callback()
+                    if report and not report.get("skipped"):
+                        print(
+                            f"Bağlamsal capture: {report['matched']} maç eşleşti, "
+                            f"{report['prematch_lineups']} maç önü kadro"
                         )
             except KeyboardInterrupt:  # pragma: no cover
                 print("Bot durduruluyor.")

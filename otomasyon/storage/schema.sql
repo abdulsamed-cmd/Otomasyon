@@ -134,6 +134,50 @@ CREATE TABLE IF NOT EXISTS clubelo_ratings (
 );
 CREATE INDEX IF NOT EXISTS idx_clubelo_date ON clubelo_ratings(rating_date);
 
+-- External context is stored separately and never changes coupon selection
+-- unless its own chronological validation gate is explicitly passed.
+CREATE TABLE IF NOT EXISTS fotmob_fixtures (
+    match_id       INTEGER PRIMARY KEY,
+    league_id      INTEGER,
+    league_name    TEXT,
+    home_id        INTEGER,
+    home           TEXT NOT NULL,
+    away_id        INTEGER,
+    away           TEXT NOT NULL,
+    start_ts       INTEGER NOT NULL,
+    started        INTEGER NOT NULL,
+    finished       INTEGER NOT NULL,
+    cancelled      INTEGER NOT NULL,
+    updated_ts     INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS iddaa_fotmob_links (
+    event_id       INTEGER PRIMARY KEY,
+    match_id       INTEGER NOT NULL,
+    match_score    REAL NOT NULL,
+    linked_ts      INTEGER NOT NULL,
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (match_id) REFERENCES fotmob_fixtures(match_id)
+);
+
+CREATE TABLE IF NOT EXISTS fotmob_context_captures (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id          INTEGER NOT NULL,
+    captured_ts       INTEGER NOT NULL,
+    started           INTEGER NOT NULL,
+    finished          INTEGER NOT NULL,
+    coverage_level    TEXT,
+    xg_home           REAL,
+    xg_away           REAL,
+    lineup_available  INTEGER NOT NULL,
+    home_starters     INTEGER NOT NULL,
+    away_starters     INTEGER NOT NULL,
+    UNIQUE (match_id, captured_ts),
+    FOREIGN KEY (match_id) REFERENCES fotmob_fixtures(match_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fotmob_context_match_time
+    ON fotmob_context_captures(match_id, captured_ts);
+
 -- Generated coupons (daily main/alt, surprise). No auto-play; informational.
 CREATE TABLE IF NOT EXISTS coupons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,

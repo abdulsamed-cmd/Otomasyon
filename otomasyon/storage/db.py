@@ -421,6 +421,106 @@ class Database:
             ).fetchall()
         }
 
+    def save_fotmob_fixtures(self, fixtures, *, now: int | None = None) -> int:
+        now = now or int(time.time())
+        rows = [
+            (
+                item.match_id,
+                item.league_id,
+                item.league_name,
+                item.home_id,
+                item.home,
+                item.away_id,
+                item.away,
+                item.start_ts,
+                int(item.started),
+                int(item.finished),
+                int(item.cancelled),
+                now,
+            )
+            for item in fixtures
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO fotmob_fixtures
+                (match_id, league_id, league_name, home_id, home, away_id, away,
+                 start_ts, started, finished, cancelled, updated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_id) DO UPDATE SET
+                league_id=excluded.league_id, league_name=excluded.league_name,
+                home_id=excluded.home_id, home=excluded.home,
+                away_id=excluded.away_id, away=excluded.away,
+                start_ts=excluded.start_ts, started=excluded.started,
+                finished=excluded.finished, cancelled=excluded.cancelled,
+                updated_ts=excluded.updated_ts
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def save_fotmob_links(
+        self, links: dict, diagnostics: list[dict], *, now: int | None = None
+    ) -> int:
+        now = now or int(time.time())
+        scores = {
+            item["event_id"]: item["score"]
+            for item in diagnostics
+            if item["method"] != "unmatched"
+        }
+        rows = [
+            (event_id, fixture.match_id, scores[event_id], now)
+            for event_id, fixture in links.items()
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO iddaa_fotmob_links
+                (event_id, match_id, match_score, linked_ts)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                match_id=excluded.match_id, match_score=excluded.match_score,
+                linked_ts=excluded.linked_ts
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def save_fotmob_contexts(self, contexts) -> int:
+        rows = [
+            (
+                item.match_id,
+                item.captured_ts,
+                int(item.started),
+                int(item.finished),
+                item.coverage_level,
+                item.xg_home,
+                item.xg_away,
+                int(item.lineup_available),
+                item.home_starters,
+                item.away_starters,
+            )
+            for item in contexts
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO fotmob_context_captures
+                (match_id, captured_ts, started, finished, coverage_level,
+                 xg_home, xg_away, lineup_available, home_starters, away_starters)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_id, captured_ts) DO UPDATE SET
+                started=excluded.started, finished=excluded.finished,
+                coverage_level=excluded.coverage_level,
+                xg_home=excluded.xg_home, xg_away=excluded.xg_away,
+                lineup_available=excluded.lineup_available,
+                home_starters=excluded.home_starters,
+                away_starters=excluded.away_starters
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
     # -- results & settlement ----------------------------------------------
     def save_result(self, result, *, now: int | None = None) -> None:
         now = now or int(time.time())

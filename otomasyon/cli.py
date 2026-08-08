@@ -73,6 +73,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         push_hour=config.DAILY_PUSH_HOUR,
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
+        context_callback=lambda: service.capture_fotmob_context(args.db),
     )
     bot.run()
     return 0
@@ -323,6 +324,29 @@ def cmd_coupon_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fotmob_context(args: argparse.Namespace) -> int:
+    report = service.capture_fotmob_context(
+        args.db,
+        detail_window_hours=args.detail_window,
+        detail_limit=args.detail_limit,
+        force=True,
+    )
+    print("=== FotMob bağlamsal veri (RAPOR MODU) ===")
+    print(
+        f"iddaa {report['events']} maç, FotMob {report['fixtures']} maç, "
+        f"eşleşen {report['matched']} (%{report['match_rate']*100:.1f})"
+    )
+    print(
+        f"Detay {report['details']}, doğrulanmış kadro {report['lineups']} "
+        f"(maç önü {report['prematch_lineups']}), "
+        f"xG bulunan {report['xg']}"
+    )
+    print("Canlı kupon etkisi: KAPALI")
+    for error in report["errors"]:
+        print(f"  {error['scope']}: {error['error']}")
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -463,6 +487,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum estimated coupon EV (e.g. 0 for non-negative)",
     )
     p_replay.set_defaults(func=cmd_coupon_replay)
+
+    p_fotmob = sub.add_parser(
+        "fotmob-context", help="Capture report-only xG and lineup context"
+    )
+    p_fotmob.add_argument("--detail-window", type=float, default=2.0)
+    p_fotmob.add_argument("--detail-limit", type=int, default=30)
+    p_fotmob.set_defaults(func=cmd_fotmob_context)
     return parser
 
 

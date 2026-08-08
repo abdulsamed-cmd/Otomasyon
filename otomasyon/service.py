@@ -308,3 +308,84 @@ def backfill_clubelo(
         "rows": rows,
         "errors": errors,
     }
+
+
+def capture_fotmob_context(
+    db_path: str,
+    *,
+    client=None,
+    now: datetime | None = None,
+    detail_window_hours: float = 2.0,
+    detail_limit: int = 30,
+    force: bool = False,
+) -> dict:
+    """Capture report-only FotMob fixture links and near-kickoff context."""
+    from .fotmob import FotMobClient, match_fixtures
+
+    client = client or FotMobClient()
+    now = now or datetime.now(tz=config.TIMEZONE)
+    captured_ts = int(now.timestamp())
+    with Database(db_path) as db:
+        last = int(db.get_setting("last_fotmob_context_ts") or 0)
+    if (
+        not force
+        and captured_ts - last < config.CONTEXT_POLL_INTERVAL_SECONDS
+    ):
+        return {"skipped": True, "live_enabled": False}
+    events, competitions = get_live_events()
+    relevant_days = {
+        datetime.fromtimestamp(event.start_ts, tz=config.TIMEZONE).date()
+        for event in events
+        if -6 * 3600 <= event.start_ts - int(now.timestamp()) <= 30 * 3600
+    }
+    fixtures = []
+    errors = []
+    for day in sorted(relevant_days):
+        try:
+            fixtures.extend(client.fetch_date(day))
+        except Exception as exc:
+            errors.append({"scope": day.isoformat(), "error": str(exc)})
+    links, diagnostics = match_fixtures(events, fixtures)
+
+    contexts = []
+    detail_candidates = sorted(
+        (
+            fixture
+            for fixture in links.values()
+            if abs(fixture.start_ts - captured_ts) <= detail_window_hours * 3600
+            and not fixture.cancelled
+        ),
+        key=lambda fixture: abs(fixture.start_ts - captured_ts),
+    )[:detail_limit]
+    for fixture in detail_candidates:
+        try:
+            contexts.append(
+                client.fetch_context(fixture.match_id, captured_ts=captured_ts)
+            )
+        except Exception as exc:
+            errors.append(
+                {"scope": f"match:{fixture.match_id}", "error": str(exc)}
+            )
+
+    with Database(db_path) as db:
+        db.upsert_competitions(competitions)
+        db.save_events(events, now=captured_ts)
+        db.save_fotmob_fixtures(fixtures, now=captured_ts)
+        db.save_fotmob_links(links, diagnostics, now=captured_ts)
+        db.save_fotmob_contexts(contexts)
+        db.set_setting("last_fotmob_context_ts", str(captured_ts))
+    return {
+        "skipped": False,
+        "events": len(events),
+        "fixtures": len(fixtures),
+        "matched": len(links),
+        "match_rate": len(links) / len(events) if events else 0.0,
+        "details": len(contexts),
+        "lineups": sum(item.lineup_available for item in contexts),
+        "prematch_lineups": sum(
+            item.lineup_available and not item.started for item in contexts
+        ),
+        "xg": sum(item.xg_home is not None for item in contexts),
+        "live_enabled": False,
+        "errors": errors,
+    }

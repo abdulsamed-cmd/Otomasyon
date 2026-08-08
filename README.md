@@ -20,7 +20,8 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
   15 dakikalık oto-settlement ve Telegram sonuç bildirimi
 - [x] Bağlamsal gol modeli + opponent-adjusted Elo + pazar bazlı kronolojik backtest
 - [x] İstatistiksel ROI kabul kapısı + bağımsız ClubElo rapor/validasyon katmanı
-- [ ] Model iyileştirme (xG, kadro-sakatlık, hava) ve pozitif holdout kanıtı
+- [x] FotMob xG/doğrulanmış kadro capture katmanı (rapor modu)
+- [ ] Bağlamsal capture sonuçlarını biriktirme ve pozitif holdout kanıtı
 
 ### Komutlar
 
@@ -42,6 +43,7 @@ python3 -m otomasyon.cli clubelo-backtest --start 2026-03-01 --end 2026-03-31
 python3 -m otomasyon.cli coupon-replay --start 2025-09-01 --end 2026-02-28
 python3 -m otomasyon.cli coupon-replay --start 2026-03-01 --end 2026-03-31 \
   --calibrated --calibration-prior 400 --min-ev 0
+python3 -m otomasyon.cli fotmob-context --detail-window 2 --detail-limit 30
 ```
 
 ## Veri kaynağı
@@ -114,6 +116,18 @@ dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmad
 
 Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/sistem
 kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
+
+### xG ve doğrulanmış kadro capture'ı
+
+`fotmob-context`, güncel FotMob web API'sinden günlük fikstürü alır ve iddaa
+maçlarıyla takım adı+saat üzerinden yalnız açık ara benzersiz eşleşmeleri
+saklar. Başlama saatine yaklaşan maçlarda doğrulanmış 11'ler capture edilir;
+maç sonrası oluşan xG ayrıca `started`/`finished` bayraklarıyla saklandığı için
+maç önü tahmine sızamaz. Katman rapor modundadır ve kupon motoruna bağlı
+değildir. İlk canlı ölçümde 757 iddaa maçının 426'sı eşleşmiş, incelenen 30
+yakın maçın 12'sinde maç başlamadan doğrulanmış kadro bulunmuştur.
+Telegram botu çalışırken bu capture en fazla 30 dakikada bir otomatik yenilenir;
+poll döngüsünün sık çalışması veri kaynaklarına ek yük oluşturmaz.
 
 ## Kurulum ve çalıştırma
 
