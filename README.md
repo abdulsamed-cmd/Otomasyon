@@ -12,11 +12,25 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 
 - [x] Veri kaynağı keşfi — iddaa genel JSON API (`sportsbookv2.iddaa.com`)
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
-- [ ] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
-- [ ] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
-- [ ] Telegram botu (`bugün` / `sürpriz`, tek kullanıcı)
-- [ ] Sonuç takibi + metrikler (Mackolik arşivi)
-- [ ] Kendi olasılık modelimiz (ROI/CLV)
+- [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
+- [x] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
+- [x] Telegram botu (`bugün` / `sürpriz`, tek kullanıcı) + proaktif günlük gönderim
+- [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
+- [ ] Otomatik sonuç kaynağı (Mackolik) + oto-settlement zamanlayıcı
+- [ ] Kendi bağlamsal olasılık modelimiz (form/ev/hava/sakatlık → ROI/CLV)
+
+### Komutlar
+
+```bash
+python3 -m otomasyon.cli fetch [--sample N]   # bülteni çek/sakla
+python3 -m otomasyon.cli coupon               # günün ana + alternatif kuponu
+python3 -m otomasyon.cli surprise             # sürpriz laboratuvarı
+python3 -m otomasyon.cli bot                  # Telegram botu (+ proaktif gönderim)
+python3 -m otomasyon.cli push [--force]       # günün kuponunu proaktif gönder
+python3 -m otomasyon.cli result --event ID --ft 2-1 [--ht 1-0]
+python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + bildir
+python3 -m otomasyon.cli metrics              # isabet / ROI / ort. oran
+```
 
 ## Veri kaynağı
 
