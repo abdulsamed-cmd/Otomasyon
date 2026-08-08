@@ -374,6 +374,18 @@ def capture_fotmob_context(
         db.save_fotmob_links(links, diagnostics, now=captured_ts)
         db.save_fotmob_contexts(contexts)
         db.set_setting("last_fotmob_context_ts", str(captured_ts))
+        last_lineup_backfill = db.get_setting("last_lineup_backfill_date")
+    prematch_lineups = sum(
+        item.lineup_available and not item.started for item in contexts
+    )
+    lineup_backfill = None
+    today = now.strftime("%Y-%m-%d")
+    if prematch_lineups and last_lineup_backfill != today:
+        lineup_backfill = backfill_prior_lineups(
+            db_path, client=client, now=now
+        )
+        with Database(db_path) as db:
+            db.set_setting("last_lineup_backfill_date", today)
     return {
         "skipped": False,
         "events": len(events),
@@ -382,10 +394,176 @@ def capture_fotmob_context(
         "match_rate": len(links) / len(events) if events else 0.0,
         "details": len(contexts),
         "lineups": sum(item.lineup_available for item in contexts),
-        "prematch_lineups": sum(
-            item.lineup_available and not item.started for item in contexts
-        ),
+        "prematch_lineups": prematch_lineups,
         "xg": sum(item.xg_home is not None for item in contexts),
+        "lineup_backfill": lineup_backfill,
         "live_enabled": False,
         "errors": errors,
     }
+
+
+def backfill_prior_lineups(
+    db_path: str,
+    *,
+    client=None,
+    now: datetime | None = None,
+    per_team: int = 1,
+    team_limit: int = 30,
+) -> dict:
+    """Fetch prior official lineups for teams with a current prematch lineup."""
+    from .eligibility import is_daily_eligible
+    from .fotmob import FotMobClient
+
+    client = client or FotMobClient()
+    now = now or datetime.now(tz=config.TIMEZONE)
+    captured_ts = int(now.timestamp())
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT DISTINCT f.match_id, f.start_ts, f.home_id, f.away_id,
+                COALESCE(c.name, '') AS competition
+            FROM fotmob_fixtures f
+            JOIN iddaa_fotmob_links l ON l.match_id=f.match_id
+            JOIN events e ON e.id=l.event_id
+            LEFT JOIN competitions c ON c.id=e.competition_id
+            JOIN fotmob_context_captures x ON x.match_id=f.match_id
+            WHERE x.lineup_available=1 AND x.started=0 AND f.start_ts>?
+            ORDER BY f.start_ts
+            """,
+            (captured_ts,),
+        ).fetchall()
+    targets = []
+    seen_teams = set()
+    for row in rows:
+        if not is_daily_eligible(row["competition"]):
+            continue
+        for team_id in (row["home_id"], row["away_id"]):
+            if team_id and team_id not in seen_teams:
+                targets.append((team_id, row["start_ts"]))
+                seen_teams.add(team_id)
+    targets = targets[:team_limit]
+
+    prior_fixtures = {}
+    contexts = []
+    errors = []
+    for team_id, before_ts in targets:
+        try:
+            candidates = [
+                fixture
+                for fixture in client.fetch_team_fixtures(team_id)
+                if fixture.finished
+                and fixture.start_ts < before_ts
+                and is_daily_eligible(fixture.league_name)
+            ]
+            candidates.sort(key=lambda fixture: fixture.start_ts, reverse=True)
+            for fixture in candidates[:per_team]:
+                prior_fixtures[fixture.match_id] = fixture
+        except Exception as exc:
+            errors.append({"scope": f"team:{team_id}", "error": str(exc)})
+    for fixture in prior_fixtures.values():
+        try:
+            contexts.append(
+                client.fetch_context(fixture.match_id, captured_ts=captured_ts)
+            )
+        except Exception as exc:
+            errors.append(
+                {"scope": f"match:{fixture.match_id}", "error": str(exc)}
+            )
+    with Database(db_path) as db:
+        db.save_fotmob_fixtures(prior_fixtures.values(), now=captured_ts)
+        db.save_fotmob_contexts(contexts)
+    return {
+        "teams": len(targets),
+        "fixtures": len(prior_fixtures),
+        "lineups": sum(item.lineup_available for item in contexts),
+        "xg": sum(item.xg_home is not None for item in contexts),
+        "errors": errors,
+    }
+
+
+def lineup_risk_report(
+    db_path: str,
+    *,
+    now: datetime | None = None,
+    high_rotation_changes: int = 5,
+) -> dict:
+    """Report current lineup rotation without changing coupon selection."""
+    from .eligibility import is_daily_eligible
+
+    now = now or datetime.now(tz=config.TIMEZONE)
+    now_ts = int(now.timestamp())
+    items = []
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT f.match_id, f.home, f.away, f.start_ts,
+                x.captured_ts, COALESCE(c.name, '') AS competition
+            FROM fotmob_fixtures f
+            JOIN iddaa_fotmob_links l ON l.match_id=f.match_id
+            JOIN events e ON e.id=l.event_id
+            LEFT JOIN competitions c ON c.id=e.competition_id
+            JOIN fotmob_context_captures x ON x.match_id=f.match_id
+            WHERE x.lineup_available=1 AND x.started=0 AND f.start_ts>?
+              AND x.captured_ts=(
+                  SELECT MAX(x2.captured_ts)
+                  FROM fotmob_context_captures x2
+                  WHERE x2.match_id=f.match_id AND x2.lineup_available=1
+              )
+            ORDER BY f.start_ts
+            """,
+            (now_ts,),
+        ).fetchall()
+        for row in rows:
+            if not is_daily_eligible(row["competition"]):
+                continue
+            features = db.lineup_features(row["match_id"], row["captured_ts"])
+            home_changes = features.get("home", {}).get("changes")
+            away_changes = features.get("away", {}).get("changes")
+            comparable = home_changes is not None and away_changes is not None
+            items.append(
+                {
+                    "match_id": row["match_id"],
+                    "home": row["home"],
+                    "away": row["away"],
+                    "start_ts": row["start_ts"],
+                    "home_changes": home_changes,
+                    "away_changes": away_changes,
+                    "comparable": comparable,
+                    "high_rotation": (
+                        comparable
+                        and max(home_changes, away_changes)
+                        >= high_rotation_changes
+                    ),
+                }
+            )
+    return {
+        "matches": len(items),
+        "comparable": sum(item["comparable"] for item in items),
+        "high_rotation": [item for item in items if item["high_rotation"]],
+        "selection_enabled": False,
+    }
+
+
+def lineup_risk_text(db_path: str = config.DB_PATH) -> str:
+    report = lineup_risk_report(db_path)
+    if not report["matches"]:
+        return "Henüz doğrulanmış maç önü kadrosu yok."
+    lines = [
+        "Kadro risk raporu",
+        (
+            f"{report['matches']} kadro · {report['comparable']} karşılaştırma · "
+            f"{len(report['high_rotation'])} yüksek rotasyon"
+        ),
+    ]
+    if not report["high_rotation"]:
+        lines.append("Yüksek rotasyon tespit edilmedi.")
+    for item in report["high_rotation"]:
+        when = datetime.fromtimestamp(
+            item["start_ts"], tz=config.TIMEZONE
+        ).strftime("%H:%M")
+        lines.append(
+            f"⚠️ {when} {item['home']} - {item['away']}: "
+            f"ev {item['home_changes']}, dep {item['away_changes']} değişiklik"
+        )
+    lines.append("Rapor modudur; kupon seçimini henüz değiştirmez.")
+    return "\n".join(lines)

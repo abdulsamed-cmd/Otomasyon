@@ -178,6 +178,22 @@ CREATE TABLE IF NOT EXISTS fotmob_context_captures (
 CREATE INDEX IF NOT EXISTS idx_fotmob_context_match_time
     ON fotmob_context_captures(match_id, captured_ts);
 
+CREATE TABLE IF NOT EXISTS fotmob_lineup_players (
+    match_id       INTEGER NOT NULL,
+    captured_ts    INTEGER NOT NULL,
+    side           TEXT NOT NULL CHECK (side IN ('home', 'away')),
+    player_id      INTEGER NOT NULL,
+    name           TEXT NOT NULL,
+    position_id    INTEGER,
+    market_value   REAL,
+    PRIMARY KEY (match_id, captured_ts, side, player_id),
+    FOREIGN KEY (match_id, captured_ts)
+        REFERENCES fotmob_context_captures(match_id, captured_ts)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_fotmob_lineup_player
+    ON fotmob_lineup_players(player_id, captured_ts);
+
 -- Generated coupons (daily main/alt, surprise). No auto-play; informational.
 CREATE TABLE IF NOT EXISTS coupons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,

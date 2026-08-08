@@ -14,7 +14,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
 - [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
 - [x] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
-- [x] Telegram botu (`bugün` / `sürpriz`, tek kullanıcı) + proaktif günlük gönderim
+- [x] Telegram botu (`bugün` / `sürpriz` / `kadro`, tek kullanıcı) + proaktif gönderim
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
 - [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
   15 dakikalık oto-settlement ve Telegram sonuç bildirimi
@@ -44,6 +44,8 @@ python3 -m otomasyon.cli coupon-replay --start 2025-09-01 --end 2026-02-28
 python3 -m otomasyon.cli coupon-replay --start 2026-03-01 --end 2026-03-31 \
   --calibrated --calibration-prior 400 --min-ev 0
 python3 -m otomasyon.cli fotmob-context --detail-window 2 --detail-limit 30
+python3 -m otomasyon.cli fotmob-lineup-backfill --per-team 1
+python3 -m otomasyon.cli lineup-risk --high-rotation 5
 ```
 
 ## Veri kaynağı
@@ -128,6 +130,10 @@ değildir. İlk canlı ölçümde 757 iddaa maçının 426'sı eşleşmiş, ince
 yakın maçın 12'sinde maç başlamadan doğrulanmış kadro bulunmuştur.
 Telegram botu çalışırken bu capture en fazla 30 dakikada bir otomatik yenilenir;
 poll döngüsünün sık çalışması veri kaynaklarına ek yük oluşturmaz.
+Oyuncu kimlikleri, pozisyonları ve mevcut piyasa değerleri ayrıca saklanır.
+Önceki resmi maçın ilk 11'iyle devamlılık karşılaştırması yapılır; beş veya
+daha fazla değişiklik şimdilik yalnız `kadro` komutunda risk uyarısı üretir ve
+kupon seçimini değiştirmez.
 
 ## Kurulum ve çalıştırma
 

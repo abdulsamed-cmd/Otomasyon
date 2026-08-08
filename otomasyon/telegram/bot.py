@@ -22,6 +22,7 @@ HELP = (
     "Merhaba! Komutlar:\n"
     "• bugün — günün düşük riskli kuponları (ana + alternatif)\n"
     "• sürpriz — sürpriz laboratuvarı (İY/MS 1/2·2/1, 6+ gol + sistem)\n\n"
+    "• kadro — doğrulanmış ilk 11 rotasyon riskleri\n\n"
     "Not: Otomatik oynama yapılmaz; yalnızca bilgilendirme."
 )
 
@@ -43,6 +44,7 @@ class Bot:
         *,
         on_daily: Callable[[], str],
         on_surprise: Callable[[], str],
+        on_lineup: Callable[[], str] | None = None,
         db=None,
         push_hour: int | None = None,
         push_callback: Callable[[], object] | None = None,
@@ -53,6 +55,7 @@ class Bot:
         self.allowed = (allowed_username or "").lstrip("@")
         self.on_daily = on_daily
         self.on_surprise = on_surprise
+        self.on_lineup = on_lineup
         self.db = db
         self.push_hour = push_hour
         self.push_callback = push_callback
@@ -89,6 +92,8 @@ class Bot:
         # Tolerant of common misspellings (süpriz / supriz / suprise).
         if any(w in text for w in ("sürpriz", "surpriz", "süpriz", "supriz", "suprise")):
             return self.on_surprise()
+        if "kadro" in text and self.on_lineup is not None:
+            return self.on_lineup()
         return HELP
 
     def _maybe_scheduled_push(self) -> None:

@@ -69,6 +69,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         username,
         on_daily=lambda: service.daily_text(args.db),
         on_surprise=service.surprise_text,
+        on_lineup=lambda: service.lineup_risk_text(args.db),
         db=db,
         push_hour=config.DAILY_PUSH_HOUR,
         push_callback=lambda: service.push_daily(args.db, client),
@@ -347,6 +348,40 @@ def cmd_fotmob_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fotmob_lineup_backfill(args: argparse.Namespace) -> int:
+    report = service.backfill_prior_lineups(
+        args.db, per_team=args.per_team, team_limit=args.team_limit
+    )
+    print("=== FotMob önceki kadro backfill ===")
+    print(
+        f"Takım {report['teams']}, önceki maç {report['fixtures']}, "
+        f"kadro {report['lineups']}, xG {report['xg']}"
+    )
+    for error in report["errors"]:
+        print(f"  {error['scope']}: {error['error']}")
+    return 0
+
+
+def cmd_lineup_risk(args: argparse.Namespace) -> int:
+    report = service.lineup_risk_report(
+        args.db, high_rotation_changes=args.high_rotation
+    )
+    print("=== Kadro rotasyon raporu (SEÇİM ETKİSİ KAPALI) ===")
+    print(
+        f"Güncel kadro {report['matches']}, önceki kadroyla karşılaştırılabilen "
+        f"{report['comparable']}, yüksek rotasyon {len(report['high_rotation'])}"
+    )
+    for item in report["high_rotation"]:
+        when = datetime.fromtimestamp(
+            item["start_ts"], tz=config.TIMEZONE
+        ).strftime("%H:%M")
+        print(
+            f"  {when} {item['home']} - {item['away']}: "
+            f"ev {item['home_changes']}, dep {item['away_changes']} değişiklik"
+        )
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -494,6 +529,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_fotmob.add_argument("--detail-window", type=float, default=2.0)
     p_fotmob.add_argument("--detail-limit", type=int, default=30)
     p_fotmob.set_defaults(func=cmd_fotmob_context)
+
+    p_lineups = sub.add_parser(
+        "fotmob-lineup-backfill",
+        help="Backfill prior official lineups for current matched teams",
+    )
+    p_lineups.add_argument("--per-team", type=int, default=1)
+    p_lineups.add_argument("--team-limit", type=int, default=30)
+    p_lineups.set_defaults(func=cmd_fotmob_lineup_backfill)
+
+    p_risk = sub.add_parser(
+        "lineup-risk", help="Report high rotation from confirmed lineups"
+    )
+    p_risk.add_argument("--high-rotation", type=int, default=5)
+    p_risk.set_defaults(func=cmd_lineup_risk)
     return parser
 
 

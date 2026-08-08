@@ -518,8 +518,90 @@ class Database:
             """,
             rows,
         )
+        player_rows = []
+        for item in contexts:
+            for side, players in (
+                ("home", item.home_players),
+                ("away", item.away_players),
+            ):
+                player_rows.extend(
+                    (
+                        item.match_id,
+                        item.captured_ts,
+                        side,
+                        player.player_id,
+                        player.name,
+                        player.position_id,
+                        player.market_value,
+                    )
+                    for player in players
+                )
+        self.conn.executemany(
+            """
+            INSERT INTO fotmob_lineup_players
+                (match_id, captured_ts, side, player_id, name, position_id,
+                 market_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_id, captured_ts, side, player_id) DO UPDATE SET
+                name=excluded.name, position_id=excluded.position_id,
+                market_value=excluded.market_value
+            """,
+            player_rows,
+        )
         self.conn.commit()
         return len(rows)
+
+    def lineup_features(self, match_id: int, captured_ts: int) -> dict:
+        """Return point-in-time lineup value and continuity versus prior capture."""
+        fixture = self.conn.execute(
+            """
+            SELECT home_id, away_id FROM fotmob_fixtures WHERE match_id=?
+            """,
+            (match_id,),
+        ).fetchone()
+        if fixture is None:
+            return {}
+        output = {}
+        for side, team_id in (("home", fixture["home_id"]), ("away", fixture["away_id"])):
+            current = self.conn.execute(
+                """
+                SELECT player_id, market_value FROM fotmob_lineup_players
+                WHERE match_id=? AND captured_ts=? AND side=?
+                """,
+                (match_id, captured_ts, side),
+            ).fetchall()
+            previous = self.conn.execute(
+                """
+                SELECT lp.player_id, lp.market_value
+                FROM fotmob_fixtures f
+                JOIN fotmob_context_captures c ON c.match_id=f.match_id
+                JOIN fotmob_lineup_players lp
+                    ON lp.match_id=c.match_id AND lp.captured_ts=c.captured_ts
+                WHERE (f.home_id=? OR f.away_id=?)
+                  AND f.start_ts < (SELECT start_ts FROM fotmob_fixtures WHERE match_id=?)
+                  AND c.captured_ts < (SELECT start_ts FROM fotmob_fixtures WHERE match_id=?)
+                  AND c.lineup_available=1
+                  AND lp.side=CASE WHEN f.home_id=? THEN 'home' ELSE 'away' END
+                ORDER BY f.start_ts DESC, c.captured_ts DESC
+                LIMIT 11
+                """,
+                (team_id, team_id, match_id, match_id, team_id),
+            ).fetchall()
+            current_ids = {row["player_id"] for row in current}
+            previous_ids = {row["player_id"] for row in previous}
+            output[side] = {
+                "starters": len(current_ids),
+                "total_market_value": sum(
+                    row["market_value"] or 0.0 for row in current
+                ),
+                "returning_starters": (
+                    len(current_ids & previous_ids) if previous_ids else None
+                ),
+                "changes": (
+                    len(current_ids - previous_ids) if previous_ids else None
+                ),
+            }
+        return output
 
     # -- results & settlement ----------------------------------------------
     def save_result(self, result, *, now: int | None = None) -> None:

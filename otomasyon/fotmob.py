@@ -7,7 +7,7 @@ normal for lower-coverage competitions and are represented as ``None``.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 import requests
@@ -45,6 +45,16 @@ class FotMobMatchContext:
     lineup_available: bool
     home_starters: int
     away_starters: int
+    home_players: list["FotMobStarter"] = field(default_factory=list)
+    away_players: list["FotMobStarter"] = field(default_factory=list)
+
+
+@dataclass
+class FotMobStarter:
+    player_id: int
+    name: str
+    position_id: int | None
+    market_value: float | None
 
 
 class FotMobClient:
@@ -128,8 +138,10 @@ class FotMobClient:
             if xg_home is not None:
                 break
         lineup = content.get("lineup") or {}
-        home_starters = len((lineup.get("homeTeam") or {}).get("starters") or [])
-        away_starters = len((lineup.get("awayTeam") or {}).get("starters") or [])
+        home_players = self._starters(lineup.get("homeTeam") or {})
+        away_players = self._starters(lineup.get("awayTeam") or {})
+        home_starters = len(home_players)
+        away_starters = len(away_players)
         return FotMobMatchContext(
             match_id=int(general.get("matchId") or match_id),
             captured_ts=captured_ts or int(time.time()),
@@ -141,7 +153,75 @@ class FotMobClient:
             lineup_available=home_starters == 11 and away_starters == 11,
             home_starters=home_starters,
             away_starters=away_starters,
+            home_players=home_players,
+            away_players=away_players,
         )
+
+    def fetch_team_fixtures(self, team_id: int) -> list[FotMobFixture]:
+        payload = self._get("teams", {"id": team_id})
+        raw_fixtures = (
+            ((payload.get("fixtures") or {}).get("allFixtures") or {}).get(
+                "fixtures"
+            )
+            or []
+        )
+        fixtures = []
+        for raw in raw_fixtures:
+            status = raw.get("status") or {}
+            utc_time = status.get("utcTime")
+            home, away = raw.get("home") or {}, raw.get("away") or {}
+            if not utc_time or not home or not away:
+                continue
+            try:
+                start_ts = int(
+                    datetime.fromisoformat(
+                        utc_time.replace("Z", "+00:00")
+                    ).timestamp()
+                )
+            except ValueError:
+                continue
+            tournament = raw.get("tournament") or {}
+            fixtures.append(
+                FotMobFixture(
+                    match_id=int(raw["id"]),
+                    league_id=tournament.get("leagueId"),
+                    league_name=tournament.get("name") or "",
+                    home_id=home.get("id"),
+                    home=home.get("name") or "",
+                    away_id=away.get("id"),
+                    away=away.get("name") or "",
+                    start_ts=start_ts,
+                    started=bool(status.get("started")),
+                    finished=bool(status.get("finished")),
+                    cancelled=bool(status.get("cancelled")),
+                )
+            )
+        return fixtures
+
+    @staticmethod
+    def _starters(team: dict) -> list[FotMobStarter]:
+        players = {}
+        for raw in team.get("starters") or []:
+            try:
+                player_id = int(raw["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            try:
+                market_value = (
+                    float(raw["marketValue"])
+                    if raw.get("marketValue") is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                market_value = None
+            players[player_id] = FotMobStarter(
+                player_id=player_id,
+                name=raw.get("name") or "",
+                position_id=raw.get("usualPlayingPositionId")
+                or raw.get("positionId"),
+                market_value=market_value,
+            )
+        return list(players.values())
 
 
 def match_fixtures(events, fixtures: list[FotMobFixture], *, threshold: float = 0.84):
