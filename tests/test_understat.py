@@ -87,3 +87,14 @@ def test_linked_xg_is_joined_into_model_history():
         row = db.load_historical_matches()[0]
     assert row["xg_home"] == 1.75
     assert row["xg_away"] == 0.92
+
+
+def test_postmatch_understat_forecast_is_not_persisted_as_prematch_data():
+    with Database(":memory:") as db:
+        table = db.conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='understat_forecasts'
+            """
+        ).fetchone()
+    assert table is None

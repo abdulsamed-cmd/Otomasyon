@@ -36,8 +36,6 @@ class GoalPrediction:
     xg_samples_home: int
     xg_samples_away: int
     probs: dict[str, float]
-
-
 def _poisson_probs(lam: float, max_goals: int = 10) -> list[float]:
     probs = [math.exp(-lam)]
     for goals in range(1, max_goals + 1):
@@ -296,6 +294,7 @@ def backtest(
     use_xg: bool = True,
     xg_covered_only: bool = False,
     markets: set[str] | None = None,
+    outcomes: set[str] | None = None,
 ) -> dict:
     """Chronological holdout backtest using only information before cutoff."""
     if not history:
@@ -373,18 +372,20 @@ def backtest(
         odds_ou = [row.get("odds_under25"), row.get("odds_over25")]
         if all(odds_ou):
             fair = probability.fair_probs(odds_ou)
+            over_probability = pred.probs["Üst 2.5"]
+            under_probability = 1.0 - over_probability
             candidates.extend(
                 [
                     (
                         "Alt 2.5",
                         odds_ou[0],
-                        pred.probs["Alt 2.5"] - fair[0],
+                        under_probability - fair[0],
                         "OU25",
                     ),
                     (
                         "Üst 2.5",
                         odds_ou[1],
-                        pred.probs["Üst 2.5"] - fair[1],
+                        over_probability - fair[1],
                         "OU25",
                     ),
                 ]
@@ -396,6 +397,7 @@ def backtest(
             and c[2] >= config.MODEL_MIN_EDGE
             and pred.confidence >= 0.35
             and (markets is None or c[3] in markets)
+            and (outcomes is None or c[0] in outcomes)
         ]
         if not candidates:
             continue
@@ -408,7 +410,11 @@ def backtest(
             won = (outcome == "Alt 2.5" and total < 2.5) or (
                 outcome == "Üst 2.5" and total > 2.5
             )
-            predicted = pred.probs[outcome]
+            predicted = (
+                under_probability
+                if outcome == "Alt 2.5"
+                else over_probability
+            )
         bets.append(
             {
                 "won": won,
@@ -417,6 +423,7 @@ def backtest(
                 "predicted": predicted,
                 "edge": edge,
                 "market": market,
+                "outcome": outcome,
             }
         )
 
@@ -449,6 +456,29 @@ def backtest(
                 market_roi + market_margin,
             ),
         }
+    outcome_breakdown = {}
+    for outcome in ("1", "0", "2", "Alt 2.5", "Üst 2.5"):
+        selected = [bet for bet in bets if bet["outcome"] == outcome]
+        outcome_profits = [bet["profit"] for bet in selected]
+        outcome_roi = (
+            statistics.mean(outcome_profits) if outcome_profits else 0.0
+        )
+        outcome_margin = (
+            1.96
+            * statistics.stdev(outcome_profits)
+            / math.sqrt(len(outcome_profits))
+            if len(outcome_profits) > 1
+            else 0.0
+        )
+        outcome_breakdown[outcome] = {
+            "bets": len(selected),
+            "wins": sum(bet["won"] for bet in selected),
+            "roi": outcome_roi,
+            "roi_ci95": (
+                outcome_roi - outcome_margin,
+                outcome_roi + outcome_margin,
+            ),
+        }
 
     gate_passed = (
         len(bets) >= config.MODEL_GATE_MIN_BETS
@@ -463,6 +493,7 @@ def backtest(
         "xg_enabled": use_xg,
         "xg_covered_only": xg_covered_only,
         "markets": sorted(markets) if markets else ["1X2", "OU25"],
+        "outcomes": sorted(outcomes) if outcomes else None,
         "test_matches": len(test),
         "bets": len(bets),
         "wins": sum(bet["won"] for bet in bets),
@@ -479,6 +510,7 @@ def backtest(
             else 0.0
         ),
         "market_breakdown": market_breakdown,
+        "outcome_breakdown": outcome_breakdown,
         "gate_passed": gate_passed,
         "model_live_enabled": config.MODEL_LIVE_ENABLED,
     }

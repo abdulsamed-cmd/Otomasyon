@@ -161,6 +161,11 @@ ancak %95 güven aralığı sıfırın altına indiği için canlı seçim etkis
 Günlük üretim sırasında tahminler `model_predictions` tablosuna gölge kayıt
 olarak yazılır ve sonuç/ROI/Brier ileriye dönük takip edilir.
 
+> **Sızıntı koruması:** Understat `dates[].forecast.w/d/l` alanı kullanılmaz.
+> Bu değerler gelecek fikstürlerde boş olup yalnız maçta oluşan toplam xG'den
+> sonuç sonrası hesaplanır. Pre-match tahmin gibi kullanılması yapay pozitif ROI
+> üretir. Canlı kupon ve backtest kodunda bu alan için tablo/komut bulunmaz.
+
 ## Web dashboard
 
 `/` yalnız toplu ve sonuçlanmış verileri gösterir: ana, alternatif ve sürpriz

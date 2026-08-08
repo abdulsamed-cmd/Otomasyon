@@ -195,6 +195,16 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         use_xg=not args.no_xg,
         xg_covered_only=args.xg_covered_only,
         markets=set(args.market) if args.market else None,
+        outcomes={
+            {
+                "under": "Alt 2.5",
+                "over": "Üst 2.5",
+                "home": "1",
+                "draw": "0",
+                "away": "2",
+            }[item]
+            for item in args.outcome
+        } if args.outcome else None,
     )
     if report.get("error"):
         print("Backtest yapılamadı:", report["error"])
@@ -225,6 +235,15 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print(
             f"  {market:15}: {values['bets']} seçim, "
             f"{values['wins']} kazanan, ROI %{values['roi'] * 100:.1f} "
+            f"(%95 %{values['roi_ci95'][0]*100:.1f}.."
+            f"%{values['roi_ci95'][1]*100:.1f})"
+        )
+    for outcome, values in report["outcome_breakdown"].items():
+        if not values["bets"]:
+            continue
+        print(
+            f"    {outcome:13}: {values['bets']} seçim, "
+            f"ROI %{values['roi']*100:.1f} "
             f"(%95 %{values['roi_ci95'][0]*100:.1f}.."
             f"%{values['roi_ci95'][1]*100:.1f})"
         )
@@ -559,6 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_backtest.add_argument(
         "--market", action="append", choices=("1X2", "OU25")
     )
+    p_backtest.add_argument(
+        "--outcome",
+        action="append",
+        choices=("under", "over", "home", "draw", "away"),
+    )
     p_backtest.set_defaults(func=cmd_backtest)
 
     p_clubelo = sub.add_parser(
@@ -634,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
         "shadow-metrics", help="Report settled xG shadow predictions"
     )
     p_shadow_metrics.set_defaults(func=cmd_shadow_metrics)
+
     return parser
 
 
