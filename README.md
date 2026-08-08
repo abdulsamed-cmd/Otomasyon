@@ -41,6 +41,7 @@ python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + 
 python3 -m otomasyon.cli auto-results [--force] [--notify] # Mackolik otomatik
 python3 -m otomasyon.cli metrics              # isabet / ROI / ort. oran
 python3 -m otomasyon.cli history-backfill --days 365
+python3 -m otomasyon.cli history-auto --force
 python3 -m otomasyon.cli backtest --test-days 30 --test-end 2026-04-30
 python3 -m otomasyon.cli clubelo                       # canlı, rapor modu
 python3 -m otomasyon.cli clubelo-backfill --start 2026-03-01 --end 2026-03-31
@@ -87,6 +88,13 @@ sonuçlandırılır; uzatma sonu görünen skor yanlışlıkla kullanılmaz.
 Telegram botu çalışırken sonuç taraması 15 dakikada bir yapılır. Sonuçlanan
 kupon kapatılır ve kullanıcıya otomatik bildirim gönderilir. Erteleme/iptal
 seçimleri `void` kabul edilir ve efektif oranları `1.00` sayılır.
+
+Bot ayrıca İstanbul saatiyle 04:00 sonrasında önceki günün **tüm** tamamlanmış
+futbol maçlarını Mackolik arşivinden otomatik kaydeder. Son yedi gündeki
+başarısız günler yeniden denenir; kaynak hatası alan gün tamamlanmış sayılmaz.
+Bu tam günlük arşiv kupon dışındaki resmi maçları da model eğitimine ekler.
+Hazırlık, genç ve rezerv kayıtları ham veride bulunsa bile eğitim filtresinden
+geçemez.
 
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri

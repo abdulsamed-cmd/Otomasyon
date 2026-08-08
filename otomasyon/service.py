@@ -693,6 +693,76 @@ def backfill_history(
     }
 
 
+def auto_history_archive(
+    db_path: str,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    result_client=None,
+) -> dict:
+    """Archive every completed match from recent days, once per date."""
+    from .results import MackolikClient
+
+    now = now or datetime.now(tz=config.TIMEZONE)
+    now_ts = int(now.timestamp())
+    if not force and now.hour < config.HISTORY_ARCHIVE_HOUR:
+        return {
+            "skipped": True,
+            "reason": "before_archive_hour",
+            "days": [],
+            "rows": 0,
+            "errors": [],
+        }
+    with Database(db_path) as db:
+        last = int(db.get_setting("last_history_archive_poll_ts") or 0)
+        if (
+            not force
+            and now_ts - last < config.HISTORY_ARCHIVE_POLL_INTERVAL_SECONDS
+        ):
+            return {
+                "skipped": True,
+                "reason": "rate_limited",
+                "days": [],
+                "rows": 0,
+                "errors": [],
+            }
+        pending_days = []
+        for offset in range(1, config.HISTORY_ARCHIVE_RETRY_DAYS + 1):
+            day = now.date() - timedelta(days=offset)
+            if db.get_setting(f"history_archive:{day.isoformat()}") is None:
+                pending_days.append(day)
+        db.set_setting("last_history_archive_poll_ts", str(now_ts))
+
+    client = result_client or MackolikClient()
+    archived_days = []
+    saved_rows = 0
+    errors = []
+    for day in reversed(pending_days):
+        try:
+            matches = [
+                match
+                for match in client.fetch_archive_date(day)
+                if datetime.fromtimestamp(
+                    match.start_ts, tz=config.TIMEZONE
+                ).date()
+                == day
+            ]
+            with Database(db_path) as db:
+                saved_rows += db.save_historical_matches(matches)
+                db.set_setting(
+                    f"history_archive:{day.isoformat()}", str(len(matches))
+                )
+            archived_days.append(day.isoformat())
+        except Exception as exc:
+            errors.append({"date": day.isoformat(), "error": str(exc)})
+    return {
+        "skipped": False,
+        "days": archived_days,
+        "rows": saved_rows,
+        "errors": errors,
+    }
+
+
 def backfill_clubelo(
     db_path: str,
     *,

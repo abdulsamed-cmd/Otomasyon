@@ -50,6 +50,7 @@ class Bot:
         push_callback: Callable[[], object] | None = None,
         result_callback: Callable[[], object] | None = None,
         context_callback: Callable[[], object] | None = None,
+        history_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -61,6 +62,7 @@ class Bot:
         self.push_callback = push_callback
         self.result_callback = result_callback
         self.context_callback = context_callback
+        self.history_callback = history_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -143,19 +145,35 @@ class Bot:
 
                 self._maybe_scheduled_push()
                 if self.result_callback is not None:
-                    report = self.result_callback()
-                    if report and report.get("settled"):
-                        print(
-                            f"Sonuç taraması: {report['matched']} maç eşleşti, "
-                            f"{report['settled']} kupon kapandı ve bildirildi"
-                        )
+                    try:
+                        report = self.result_callback()
+                        if report and report.get("settled"):
+                            print(
+                                f"Sonuç taraması: {report['matched']} maç eşleşti, "
+                                f"{report['settled']} kupon kapandı ve bildirildi"
+                            )
+                    except Exception as exc:
+                        print(f"Sonuç taraması hatası: {exc}")
                 if self.context_callback is not None:
-                    report = self.context_callback()
-                    if report and not report.get("skipped"):
-                        print(
-                            f"Bağlamsal capture: {report['matched']} maç eşleşti, "
-                            f"{report['prematch_lineups']} maç önü kadro"
-                        )
+                    try:
+                        report = self.context_callback()
+                        if report and not report.get("skipped"):
+                            print(
+                                f"Bağlamsal capture: {report['matched']} maç eşleşti, "
+                                f"{report['prematch_lineups']} maç önü kadro"
+                            )
+                    except Exception as exc:
+                        print(f"Bağlamsal capture hatası: {exc}")
+                if self.history_callback is not None:
+                    try:
+                        report = self.history_callback()
+                        if report and not report.get("skipped") and report.get("days"):
+                            print(
+                                f"Tarihsel arşiv: {len(report['days'])} gün, "
+                                f"{report['rows']} maç kaydedildi"
+                            )
+                    except Exception as exc:
+                        print(f"Tarihsel arşiv hatası: {exc}")
                 if poll_failed:
                     time.sleep(3)
             except KeyboardInterrupt:  # pragma: no cover

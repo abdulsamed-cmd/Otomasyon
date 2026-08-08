@@ -95,6 +95,9 @@ DAILY_PUSH_HOUR = 10
 # last-poll timestamp prevents duplicate work across bot restarts.
 RESULT_POLL_INTERVAL_SECONDS = 15 * 60
 CONTEXT_POLL_INTERVAL_SECONDS = 30 * 60
+HISTORY_ARCHIVE_HOUR = 4
+HISTORY_ARCHIVE_POLL_INTERVAL_SECONDS = 60 * 60
+HISTORY_ARCHIVE_RETRY_DAYS = 7
 # Only used when a Mackolik record lacks ``iddaaCode``. Exact event-id matching
 # is always preferred.
 RESULT_FUZZY_THRESHOLD = 0.84

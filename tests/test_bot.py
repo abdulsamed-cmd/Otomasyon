@@ -127,3 +127,34 @@ def test_keyboard_interrupt_stops_before_scheduled_callbacks():
     bot.run(poll_timeout=0)
 
     assert callback_calls == []
+
+
+def test_result_failure_does_not_skip_context_or_history(monkeypatch):
+    class OneLoopClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.polls = 0
+
+        def get_updates(self, offset=None, timeout=25):
+            self.polls += 1
+            if self.polls == 1:
+                return []
+            raise KeyboardInterrupt
+
+    callback_calls = []
+
+    def failing_result():
+        raise RuntimeError("result source down")
+
+    bot = Bot(
+        OneLoopClient(),
+        "AbdulsamedErden",
+        on_daily=lambda: "DAILY",
+        on_surprise=lambda: "SURPRISE",
+        result_callback=failing_result,
+        context_callback=lambda: callback_calls.append("context"),
+        history_callback=lambda: callback_calls.append("history"),
+    )
+    monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
+    bot.run(poll_timeout=0)
+    assert callback_calls == ["context", "history"]

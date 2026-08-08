@@ -75,6 +75,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
+        history_callback=lambda: service.auto_history_archive(args.db),
     )
     bot.run()
     return 0
@@ -189,6 +190,20 @@ def cmd_history_backfill(args: argparse.Namespace) -> int:
         for error in report["errors"][:5]:
             print(f"  {error['date']}: {error['error']}")
     return 0
+
+
+def cmd_history_auto(args: argparse.Namespace) -> int:
+    report = service.auto_history_archive(args.db, force=args.force)
+    if report["skipped"]:
+        print(f"Gece arşivi atlandı: {report['reason']}")
+        return 0
+    print(
+        f"Gece arşivi: {len(report['days'])} gün, "
+        f"{report['rows']} maç kaydedildi"
+    )
+    for error in report["errors"]:
+        print(f"  {error['date']}: {error['error']}")
+    return 0 if not report["errors"] else 1
 
 
 def cmd_backtest(args: argparse.Namespace) -> int:
@@ -573,6 +588,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_history.add_argument("--days", type=int, default=90)
     p_history.set_defaults(func=cmd_history_backfill)
+
+    p_history_auto = sub.add_parser(
+        "history-auto", help="Archive recent complete days with retries"
+    )
+    p_history_auto.add_argument("--force", action="store_true")
+    p_history_auto.set_defaults(func=cmd_history_auto)
 
     p_backtest = sub.add_parser(
         "backtest", help="Run chronological contextual-model backtest"
