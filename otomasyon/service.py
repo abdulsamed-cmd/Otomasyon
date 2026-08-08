@@ -8,7 +8,7 @@ ready-to-send text.
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from . import config, engine, formatting, settlement, surprise
 from .iddaa import IddaaClient, MarketResolver, normalize_events
@@ -213,4 +213,53 @@ def auto_results(
         "settled": len(decided),
         "dates": [day.isoformat() for day in days],
         "diagnostics": diagnostics,
+    }
+
+
+def backfill_history(
+    db_path: str,
+    *,
+    days: int,
+    end_date: date | None = None,
+    result_client=None,
+    pause_seconds: float = 0.05,
+) -> dict:
+    """Backfill completed football results/basic odds from the archive feed."""
+    from .results import MackolikClient
+
+    end_date = end_date or datetime.now(tz=config.TIMEZONE).date()
+    result_client = result_client or MackolikClient()
+    saved = 0
+    fetched_days = 0
+    errors = []
+    for offset in range(days, 0, -1):
+        day = end_date - timedelta(days=offset)
+        try:
+            matches = result_client.fetch_archive_date(day)
+            # Archive pages may carry a postponed fixture whose displayed date
+            # has moved into the future. Keep only records belonging to the
+            # requested calendar day; otherwise a single rescheduled fixture
+            # can leak future data into a chronological backtest.
+            matches = [
+                match
+                for match in matches
+                if datetime.fromtimestamp(
+                    match.start_ts, tz=config.TIMEZONE
+                ).date()
+                == day
+            ]
+            with Database(db_path) as db:
+                saved += db.save_historical_matches(matches)
+            fetched_days += 1
+        except Exception as exc:
+            errors.append({"date": day.isoformat(), "error": str(exc)})
+        if pause_seconds:
+            time.sleep(pause_seconds)
+    with Database(db_path) as db:
+        total = db.count("historical_matches")
+    return {
+        "days": fetched_days,
+        "rows_processed": saved,
+        "total": total,
+        "errors": errors,
     }

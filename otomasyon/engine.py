@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from itertools import combinations
 
 from . import config, probability
+from .eligibility import is_daily_eligible
 from .iddaa.normalize import NormalizedEvent, NormalizedMarket
 
 # Markets eligible for the daily low-risk coupon.
@@ -128,6 +129,8 @@ def _select_pool(events: list[NormalizedEvent], now_ts: int, until_ts: int) -> l
     pool: list[Leg] = []
     for ev in events:
         if not (now_ts < ev.start_ts <= until_ts):
+            continue
+        if not is_daily_eligible(ev.competition_name):
             continue
         for leg in candidate_legs_for_event(ev):
             if config.LEG_MIN_ODD <= leg.odd <= config.LEG_MAX_ODD:

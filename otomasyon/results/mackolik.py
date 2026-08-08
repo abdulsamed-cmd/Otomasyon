@@ -41,6 +41,13 @@ class SourceMatch:
     ft_away: int | None
     ht_home: int | None
     ht_away: int | None
+    competition_id: str | None = None
+    competition_name: str | None = None
+    odds_home: float | None = None
+    odds_draw: float | None = None
+    odds_away: float | None = None
+    odds_under25: float | None = None
+    odds_over25: float | None = None
 
     @property
     def is_decided(self) -> bool:
@@ -56,6 +63,16 @@ def _score_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, "", "0", "0.0"):
+        return None
+    try:
+        parsed = float(value)
+        return parsed if parsed > 1.0 else None
     except (TypeError, ValueError):
         return None
 
@@ -107,6 +124,10 @@ class MackolikClient:
             ]
         return matches
 
+    def fetch_archive_date(self, day: date) -> list[SourceMatch]:
+        """Public archive reader for historical model backfills."""
+        return self._fetch_archive(day)
+
     def _fetch_modern(self, day: date) -> list[SourceMatch]:
         last_error: Exception | None = None
         payload = None
@@ -130,9 +151,11 @@ class MackolikClient:
             raise MackolikError(
                 f"Mackolik returned {payload.get('status')!r} for {day}"
             )
-        raw_matches = (payload.get("data") or {}).get("matches") or {}
+        data = payload.get("data") or {}
+        raw_matches = data.get("matches") or {}
+        competitions = data.get("competitions") or {}
         values = raw_matches.values() if isinstance(raw_matches, dict) else raw_matches
-        return [self._parse(raw) for raw in values]
+        return [self._parse(raw, competitions) for raw in values]
 
     def _fetch_archive(self, day: date) -> list[SourceMatch]:
         last_error: Exception | None = None
@@ -160,7 +183,7 @@ class MackolikClient:
         return [self._parse_archive(row) for row in rows if len(row) > 36 and row[23] == 1]
 
     @staticmethod
-    def _parse(raw: dict) -> SourceMatch:
+    def _parse(raw: dict, competitions: dict | None = None) -> SourceMatch:
         score = raw.get("score") or {}
         ht = score.get("ht") or {}
         iddaa_code = raw.get("iddaaCode")
@@ -168,6 +191,8 @@ class MackolikClient:
             iddaa_code = int(iddaa_code) if iddaa_code is not None else None
         except (TypeError, ValueError):
             iddaa_code = None
+        competition_id = raw.get("competitionId")
+        competition = (competitions or {}).get(competition_id, {})
         return SourceMatch(
             source_id=str(raw.get("id") or ""),
             iddaa_code=iddaa_code,
@@ -180,6 +205,8 @@ class MackolikClient:
             ft_away=_score_int(score.get("away")),
             ht_home=_score_int(ht.get("home")),
             ht_away=_score_int(ht.get("away")),
+            competition_id=str(competition_id) if competition_id else None,
+            competition_name=competition.get("name"),
         )
 
     @staticmethod
@@ -227,4 +254,11 @@ class MackolikClient:
             ft_away=ft_away,
             ht_home=_score_int(row[31]),
             ht_away=_score_int(row[32]),
+            competition_id=str(row[36][2]) if row[36] and len(row[36]) > 2 else None,
+            competition_name=str(row[36][3]) if row[36] and len(row[36]) > 3 else None,
+            odds_home=_float_or_none(row[18]),
+            odds_draw=_float_or_none(row[19]),
+            odds_away=_float_or_none(row[20]),
+            odds_under25=_float_or_none(row[21]),
+            odds_over25=_float_or_none(row[22]),
         )

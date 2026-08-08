@@ -106,3 +106,13 @@ def test_favorite_match_result_requires_strong_edge():
         ],
     )
     assert engine.candidate_legs_for_event(weak) == []
+
+
+def test_daily_pool_excludes_friendlies_even_with_attractive_odds():
+    friendly = _ou_event(99, 1.50, 2.60)
+    friendly.competition_name = "Kulüplerarası Hazırlık Maçlar"
+    regular = _ou_event(100, 1.50, 2.60)
+    pool = engine._select_pool(
+        [friendly, regular], int(NOW.timestamp()), int(NOW.timestamp()) + 7200
+    )
+    assert {leg.event_id for leg in pool} == {100}

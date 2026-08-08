@@ -156,6 +156,48 @@ def cmd_auto_results(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_history_backfill(args: argparse.Namespace) -> int:
+    report = service.backfill_history(args.db, days=args.days)
+    print(
+        f"Tarihsel veri: {report['days']} gün, "
+        f"{report['rows_processed']} satır işlendi, DB toplam {report['total']}"
+    )
+    if report["errors"]:
+        print(f"Hatalı gün sayısı: {len(report['errors'])}")
+        for error in report["errors"][:5]:
+            print(f"  {error['date']}: {error['error']}")
+    return 0
+
+
+def cmd_backtest(args: argparse.Namespace) -> int:
+    from .model import backtest
+
+    with Database(args.db) as db:
+        history = db.load_historical_matches()
+    report = backtest(history, test_days=args.test_days)
+    if report.get("error"):
+        print("Backtest yapılamadı:", report["error"])
+        return 1
+    print("=== Kronolojik model backtest (rapor modu) ===")
+    print(f"  Eğitim maçı     : {report['train_matches']}")
+    print(f"  Test maçı       : {report['test_matches']}")
+    print(f"  Değer seçimi    : {report['bets']}")
+    print(f"  Kazanan         : {report['wins']}")
+    print(f"  İsabet          : %{report['hit_rate'] * 100:.1f}")
+    print(f"  Ortalama oran   : {report['avg_odds']:.2f}")
+    print(f"  Ortalama edge   : %{report['avg_edge'] * 100:.1f}")
+    print(f"  ROI             : %{report['roi'] * 100:.1f}")
+    lo, hi = report["roi_ci95"]
+    print(f"  ROI %95 aralık  : %{lo * 100:.1f} .. %{hi * 100:.1f}")
+    print(f"  1X2 Brier       : {report['brier_1x2']:.4f}")
+    print(
+        f"  Piyasa favorisi : {report['market_favourite_bets']} seçim, "
+        f"ROI %{report['market_favourite_roi'] * 100:.1f}"
+    )
+    print("  Canlı model     : KAPALI (kanıt kapısı)")
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -240,6 +282,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_auto.add_argument("--force", action="store_true", help="Ignore poll interval")
     p_auto.add_argument("--notify", action="store_true", help="Notify Telegram")
     p_auto.set_defaults(func=cmd_auto_results)
+
+    p_history = sub.add_parser(
+        "history-backfill", help="Backfill Mackolik history for model training"
+    )
+    p_history.add_argument("--days", type=int, default=90)
+    p_history.set_defaults(func=cmd_history_backfill)
+
+    p_backtest = sub.add_parser(
+        "backtest", help="Run chronological contextual-model backtest"
+    )
+    p_backtest.add_argument("--test-days", type=int, default=14)
+    p_backtest.set_defaults(func=cmd_backtest)
     return parser
 
 

@@ -18,7 +18,8 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
 - [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
   15 dakikalık oto-settlement ve Telegram sonuç bildirimi
-- [ ] Kendi bağlamsal olasılık modelimiz (form/ev/hava/sakatlık → ROI/CLV)
+- [x] Bağlamsal gol modeli temeli + kronolojik ROI/kalibrasyon backtest kapısı
+- [ ] Model iyileştirme (Elo/xG, kadro-sakatlık, hava) ve pozitif holdout kanıtı
 
 ### Komutlar
 
@@ -32,6 +33,8 @@ python3 -m otomasyon.cli result --event ID --ft 2-1 [--ht 1-0]
 python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + bildir
 python3 -m otomasyon.cli auto-results [--force] [--notify] # Mackolik otomatik
 python3 -m otomasyon.cli metrics              # isabet / ROI / ort. oran
+python3 -m otomasyon.cli history-backfill --days 180
+python3 -m otomasyon.cli backtest --test-days 30
 ```
 
 ## Veri kaynağı
@@ -68,6 +71,17 @@ seçimleri `void` kabul edilir ve efektif oranları `1.00` sayılır.
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri
 lisansı/izin değerlendirmesi yapılmalıdır.
+
+### Model güvenlik kapısı
+
+Günlük düşük-risk süreci hazırlık, genç ve rezerv liglerini tamamen dışlar.
+Bağlamsal model; zaman ağırlıklı form, lig bazlı ev/deplasman gol ortalaması,
+takım hücum/savunma gücü ve Poisson pazar olasılıklarını hesaplar. Eğitim ve
+test kronolojik olarak ayrılır; test dönemindeki hiçbir sonuç eğitime girmez.
+
+Model varsayılan olarak yalnızca rapor/backtest modundadır
+(`MODEL_LIVE_ENABLED = False`). Pozitif ve istatistiksel olarak güvenilir
+holdout ROI/kalibrasyon kanıtı oluşmadan Telegram kuponlarını etkileyemez.
 
 ## Kurulum ve çalıştırma
 

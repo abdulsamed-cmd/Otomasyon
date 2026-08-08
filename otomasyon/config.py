@@ -99,6 +99,16 @@ RESULT_POLL_INTERVAL_SECONDS = 15 * 60
 # is always preferred.
 RESULT_FUZZY_THRESHOLD = 0.84
 
+# --- Contextual model / backtest ------------------------------------------
+MODEL_LOOKBACK_DAYS = 365
+MODEL_HALF_LIFE_DAYS = 60.0
+MODEL_PRIOR_MATCHES = 8.0
+MODEL_MIN_TEAM_MATCHES = 6
+MODEL_MIN_EDGE = 0.04
+# Safety gate: model remains report/backtest-only until explicitly enabled
+# after sufficient out-of-sample evidence.
+MODEL_LIVE_ENABLED = False
+
 
 def telegram_bot_token() -> str | None:
     """Telegram bot token, read from the environment (never committed)."""

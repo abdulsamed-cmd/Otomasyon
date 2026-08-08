@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -175,6 +176,82 @@ class Database:
             )
         self.conn.commit()
         return coupon_id
+
+    # -- historical model data --------------------------------------------
+    def save_historical_matches(self, matches) -> int:
+        from ..results.matcher import normalize_team
+
+        rows = []
+        for match in matches:
+            if (
+                match.state != "post"
+                or match.ft_home is None
+                or match.ft_away is None
+            ):
+                continue
+            match_date = datetime.fromtimestamp(
+                match.start_ts, tz=config.TIMEZONE
+            ).strftime("%Y-%m-%d")
+            rows.append(
+                (
+                    match.source_id,
+                    match.iddaa_code,
+                    match.start_ts,
+                    match_date,
+                    match.competition_id,
+                    match.competition_name,
+                    match.home,
+                    match.away,
+                    normalize_team(match.home),
+                    normalize_team(match.away),
+                    match.ft_home,
+                    match.ft_away,
+                    match.ht_home,
+                    match.ht_away,
+                    match.odds_home,
+                    match.odds_draw,
+                    match.odds_away,
+                    match.odds_under25,
+                    match.odds_over25,
+                )
+            )
+        self.conn.executemany(
+            """
+            INSERT INTO historical_matches
+                (source_id, iddaa_code, start_ts, match_date, competition_id,
+                 competition, home, away, home_key, away_key, ft_home, ft_away,
+                 ht_home, ht_away, odds_home, odds_draw, odds_away,
+                 odds_under25, odds_over25)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                iddaa_code=excluded.iddaa_code,
+                ft_home=excluded.ft_home, ft_away=excluded.ft_away,
+                ht_home=excluded.ht_home, ht_away=excluded.ht_away,
+                odds_home=excluded.odds_home, odds_draw=excluded.odds_draw,
+                odds_away=excluded.odds_away,
+                odds_under25=excluded.odds_under25,
+                odds_over25=excluded.odds_over25
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def load_historical_matches(
+        self, *, before_ts: int | None = None, after_ts: int | None = None
+    ) -> list[dict]:
+        clauses, params = [], []
+        if before_ts is not None:
+            clauses.append("start_ts < ?")
+            params.append(before_ts)
+        if after_ts is not None:
+            clauses.append("start_ts >= ?")
+            params.append(after_ts)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self.conn.execute(
+            f"SELECT * FROM historical_matches{where} ORDER BY start_ts", params
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # -- results & settlement ----------------------------------------------
     def save_result(self, result, *, now: int | None = None) -> None:
