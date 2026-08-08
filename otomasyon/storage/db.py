@@ -176,6 +176,127 @@ class Database:
         self.conn.commit()
         return coupon_id
 
+    # -- results & settlement ----------------------------------------------
+    def save_result(self, result, *, now: int | None = None) -> None:
+        now = now or int(time.time())
+        self.conn.execute(
+            """
+            INSERT INTO results
+                (event_id, home_score, away_score, ht_home, ht_away,
+                 status, source, updated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                home_score = excluded.home_score,
+                away_score = excluded.away_score,
+                ht_home = excluded.ht_home,
+                ht_away = excluded.ht_away,
+                status = excluded.status,
+                source = excluded.source,
+                updated_ts = excluded.updated_ts
+            """,
+            (
+                result.event_id, result.ft_home, result.ft_away,
+                result.ht_home, result.ht_away, result.status,
+                getattr(result, "source", None), now,
+            ),
+        )
+        self.conn.commit()
+
+    def get_result(self, event_id: int):
+        from ..settlement import MatchResult
+
+        row = self.conn.execute(
+            "SELECT * FROM results WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return MatchResult(
+            event_id=row["event_id"],
+            ft_home=row["home_score"],
+            ft_away=row["away_score"],
+            ht_home=row["ht_home"],
+            ht_away=row["ht_away"],
+            status=row["status"],
+        )
+
+    def get_pending_coupons(self) -> list[dict]:
+        """Pending coupons with their legs (leg dicts ready for settle_coupon)."""
+        coupons = self.conn.execute(
+            "SELECT * FROM coupons WHERE status = 'pending' ORDER BY id"
+        ).fetchall()
+        out = []
+        for c in coupons:
+            legs = self.conn.execute(
+                """
+                SELECT cl.*, e.home AS home, e.away AS away
+                FROM coupon_legs cl
+                LEFT JOIN events e ON e.id = cl.event_id
+                WHERE cl.coupon_id = ?
+                """,
+                (c["id"],),
+            ).fetchall()
+            out.append(
+                {
+                    "id": c["id"],
+                    "kind": c["kind"],
+                    "for_date": c["for_date"],
+                    "total_odds": c["total_odds"],
+                    "legs": [
+                        {
+                            "id": leg["id"],
+                            "event_id": leg["event_id"],
+                            "home": leg["home"],
+                            "away": leg["away"],
+                            "market_t": leg["market_t"],
+                            "market_st": leg["market_st"],
+                            "market_sov": leg["market_sov"],
+                            "market_name": leg["market_name"],
+                            "outcome_name": leg["outcome_name"],
+                            "odd": leg["odd_at_creation"],
+                        }
+                        for leg in legs
+                    ],
+                }
+            )
+        return out
+
+    def apply_settlement(self, coupon_id: int, leg_ids: list[int], settlement) -> None:
+        for leg_id, leg_res in zip(leg_ids, settlement.legs):
+            self.conn.execute(
+                "UPDATE coupon_legs SET result = ? WHERE id = ?",
+                (leg_res.result, leg_id),
+            )
+        self.conn.execute(
+            "UPDATE coupons SET status = ? WHERE id = ?",
+            (settlement.status, coupon_id),
+        )
+        self.conn.commit()
+
+    def settled_coupons(self) -> list[dict]:
+        """Decided coupons with their legs, for metrics."""
+        coupons = self.conn.execute(
+            "SELECT * FROM coupons WHERE status IN ('won','lost','void') ORDER BY id"
+        ).fetchall()
+        out = []
+        for c in coupons:
+            legs = self.conn.execute(
+                "SELECT result, odd_at_creation FROM coupon_legs WHERE coupon_id = ?",
+                (c["id"],),
+            ).fetchall()
+            out.append(
+                {
+                    "id": c["id"],
+                    "kind": c["kind"],
+                    "status": c["status"],
+                    "for_date": c["for_date"],
+                    "legs": [
+                        {"result": leg["result"], "odd": leg["odd_at_creation"]}
+                        for leg in legs
+                    ],
+                }
+            )
+        return out
+
     # -- settings -----------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:
         self.conn.execute(

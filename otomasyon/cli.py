@@ -77,6 +77,57 @@ def cmd_bot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_score(text: str) -> tuple[int, int]:
+    home, away = text.replace(":", "-").split("-")
+    return int(home), int(away)
+
+
+def cmd_result(args: argparse.Namespace) -> int:
+    from .settlement import MatchResult
+
+    ft_home = ft_away = ht_home = ht_away = None
+    if args.ft:
+        ft_home, ft_away = _parse_score(args.ft)
+    if args.ht:
+        ht_home, ht_away = _parse_score(args.ht)
+    result = MatchResult(
+        event_id=args.event, ft_home=ft_home, ft_away=ft_away,
+        ht_home=ht_home, ht_away=ht_away, status=args.status,
+    )
+    service.record_result(args.db, result)
+    print(f"Sonuç kaydedildi: event {args.event} = {args.status} {args.ft or ''}")
+    return 0
+
+
+def cmd_settle(args: argparse.Namespace) -> int:
+    client = None
+    if args.notify:
+        from .telegram import TelegramClient
+
+        client = TelegramClient()
+    decided = service.settle_pending(args.db, client, notify=args.notify)
+    if not decided:
+        print("Kapatılacak (sonucu gelmiş) bekleyen kupon yok.")
+        return 0
+    for item in decided:
+        print("\n" + formatting.format_settlement(item["coupon"], item["settlement"]))
+    if args.notify:
+        print(f"\n({len(decided)} kupon sonucu Telegram'dan bildirildi.)")
+    return 0
+
+
+def cmd_metrics(args: argparse.Namespace) -> int:
+    m = service.metrics(args.db)
+    print("=== Performans metrikleri (düz 1 birim bahis) ===")
+    print(f"  Sonuçlanan kupon : {m['coupons_played']} (toplam {m['coupons_total']})")
+    print(f"  Tutan            : {m['won']}")
+    print(f"  İsabet oranı     : %{m['hit_rate'] * 100:.1f}")
+    print(f"  Ortalama oran    : {m['avg_odds']:.2f}")
+    print(f"  Kâr/Zarar        : {m['profit']:+.2f} birim")
+    print(f"  ROI              : %{m['roi'] * 100:.1f}")
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -136,6 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Send even if already pushed today"
     )
     p_push.set_defaults(func=cmd_push)
+
+    p_result = sub.add_parser("result", help="Record a match result (event_id + scores)")
+    p_result.add_argument("--event", type=int, required=True, help="iddaa event id")
+    p_result.add_argument("--ft", help="Full-time score, e.g. 2-1")
+    p_result.add_argument("--ht", help="Half-time score, e.g. 1-0")
+    p_result.add_argument(
+        "--status", default="final", choices=["final", "postponed", "cancelled"]
+    )
+    p_result.set_defaults(func=cmd_result)
+
+    p_settle = sub.add_parser("settle", help="Settle pending coupons whose results are in")
+    p_settle.add_argument(
+        "--notify", action="store_true", help="Send result notifications to Telegram"
+    )
+    p_settle.set_defaults(func=cmd_settle)
+
+    p_metrics = sub.add_parser("metrics", help="Show performance metrics")
+    p_metrics.set_defaults(func=cmd_metrics)
     return parser
 
 

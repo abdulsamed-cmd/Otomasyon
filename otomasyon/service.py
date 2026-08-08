@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
-from . import config, engine, formatting, surprise
+from . import config, engine, formatting, settlement, surprise
 from .iddaa import IddaaClient, MarketResolver, normalize_events
 from .iddaa.normalize import build_competitions_map
 from .storage import Database
@@ -79,3 +79,68 @@ def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
     with Database(db_path) as db:
         db.set_setting("last_push_date", today)
     return chat_id
+
+
+def record_result(db_path: str, result: settlement.MatchResult) -> None:
+    with Database(db_path) as db:
+        db.save_result(result)
+
+
+def settle_pending(db_path: str, client=None, *, notify: bool = True) -> list[dict]:
+    """Settle any pending coupon whose results are in; optionally notify.
+
+    Returns a list of {coupon, settlement} for the coupons that got decided.
+    """
+    decided: list[dict] = []
+    with Database(db_path) as db:
+        chat_id = db.get_setting("telegram_chat_id")
+        for coupon in db.get_pending_coupons():
+            results = {}
+            for leg in coupon["legs"]:
+                res = db.get_result(leg["event_id"])
+                if res is not None:
+                    results[leg["event_id"]] = res
+            st = settlement.settle_coupon(coupon["legs"], results)
+            if st.status == settlement.PENDING:
+                continue
+            leg_ids = [leg["id"] for leg in coupon["legs"]]
+            db.apply_settlement(coupon["id"], leg_ids, st)
+            decided.append({"coupon": coupon, "settlement": st})
+
+    if notify and client and chat_id:
+        for item in decided:
+            text = formatting.format_settlement(item["coupon"], item["settlement"])
+            client.send_message(chat_id, text)
+    return decided
+
+
+def metrics(db_path: str) -> dict:
+    """Aggregate performance over decided coupons (flat 1-unit stake)."""
+    with Database(db_path) as db:
+        coupons = db.settled_coupons()
+
+    played = [c for c in coupons if c["status"] in ("won", "lost")]
+    won = [c for c in played if c["status"] == "won"]
+    staked = float(len(played))
+    returns = 0.0
+    odds_sum = 0.0
+    for c in played:
+        eff = 1.0
+        for leg in c["legs"]:
+            if leg["result"] == "win":
+                eff *= leg["odd"]
+        odds_sum += eff
+        if c["status"] == "won":
+            returns += eff  # 1-unit stake returns eff on a win
+    profit = returns - staked
+    return {
+        "coupons_total": len(coupons),
+        "coupons_played": len(played),
+        "won": len(won),
+        "hit_rate": (len(won) / len(played)) if played else 0.0,
+        "avg_odds": (odds_sum / len(played)) if played else 0.0,
+        "staked": staked,
+        "returns": returns,
+        "profit": profit,
+        "roi": (profit / staked) if staked else 0.0,
+    }

@@ -50,6 +50,43 @@ def format_daily(coupons: dict, for_date: str) -> str:
     return "\n".join(parts)
 
 
+_KIND_LABELS = {
+    "daily_main": "Ana Kupon",
+    "daily_alt": "Alternatif Kupon",
+    "surprise": "Sürpriz Kupon",
+}
+_STATUS_LABELS = {
+    "won": "KAZANDI",
+    "lost": "KAYBETTİ",
+    "void": "İPTAL",
+    "pending": "BEKLİYOR",
+}
+_LEG_LABELS = {"win": "tuttu", "lose": "tutmadı", "void": "iptal", "pending": "bekliyor"}
+
+
+def format_settlement(coupon: dict, settlement) -> str:
+    kind = _KIND_LABELS.get(coupon.get("kind"), coupon.get("kind", "Kupon"))
+    status = _STATUS_LABELS.get(settlement.status, settlement.status)
+    lines = [f"KUPON SONUCU — {kind} ({coupon.get('for_date','')})", f"Durum: {status}"]
+    if settlement.status == "won":
+        lines.append(
+            f"Efektif oran: {settlement.effective_odds:.2f}  |  "
+            f"Kâr (1 birim): +{settlement.profit:.2f}"
+        )
+    elif settlement.status == "lost":
+        lines.append("Kâr (1 birim): -1.00")
+    lines.append("")
+    legs = coupon.get("legs", [])
+    for leg, leg_res in zip(legs, settlement.legs):
+        teams = f"{leg.get('home','?')} - {leg.get('away','?')}"
+        lines.append(
+            f"  • {teams} | {leg.get('market_name')}: "
+            f"{leg.get('outcome_name')} @ {leg.get('odd')} → "
+            f"{_LEG_LABELS.get(leg_res.result, leg_res.result)}"
+        )
+    return "\n".join(lines)
+
+
 _CATEGORY_TITLES = {
     "htft_12": "İY/MS 1/2 (deplasman geri dönüşü)",
     "htft_21": "İY/MS 2/1 (ev sahibi geri dönüşü)",
