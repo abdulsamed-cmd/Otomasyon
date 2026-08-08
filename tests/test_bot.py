@@ -35,6 +35,7 @@ def _bot(client, db=None):
         on_daily=lambda: "DAILY",
         on_surprise=lambda: "SURPRISE",
         on_lineup=lambda: "LINEUP",
+        on_status=lambda: "STATUS",
         db=db,
     )
 
@@ -45,6 +46,7 @@ def test_allowed_user_bugun_and_surpriz():
     assert bot.handle_update(_update(2, "abdulsamederden", "Sürpriz")) == "SURPRISE"
     assert bot.handle_update(_update(3, "AbdulsamedErden", "/start")) == HELP
     assert bot.handle_update(_update(4, "AbdulsamedErden", "kadro")) == "LINEUP"
+    assert bot.handle_update(_update(5, "AbdulsamedErden", "durum")) == "STATUS"
 
 
 def test_unknown_command_returns_help():

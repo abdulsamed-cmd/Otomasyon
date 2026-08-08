@@ -70,6 +70,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         on_daily=lambda: service.daily_text(args.db),
         on_surprise=lambda: service.surprise_text(args.db),
         on_lineup=lambda: service.lineup_risk_text(args.db),
+        on_status=lambda: service.model_status_text(args.db),
         db=db,
         push_hour=config.DAILY_PUSH_HOUR,
         push_callback=lambda: service.push_daily(args.db, client),

@@ -15,7 +15,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
 - [x] Sürpriz modülü (6+ Gol, sistem senaryoları)
 - [x] Sürpriz aday/sonuç persistence + 2'li sistem teorik ROI kapısı
-- [x] Telegram botu (`bugün` / `sürpriz` / `kadro`, tek kullanıcı) + proaktif gönderim
+- [x] Telegram botu (`bugün` / `sürpriz` / `kadro` / `durum`, tek kullanıcı) + proaktif gönderim
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
 - [x] Kapanış oranı capture'ı ve seçim bazlı CLV
 - [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
@@ -103,6 +103,8 @@ olursa tarih bildirilmiş sayılmaz ve sonraki bot döngüsünde yeniden denenir
 Her gün `09:45`te, `10:00` kuponundan önce ayrı bir model sağlık bildirimi
 gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
 6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.
+İzinli kullanıcı aynı raporu istediği anda Telegram'da `durum` yazarak alabilir;
+bu istek planlı günlük bildirimin deduplication durumunu değiştirmez.
 
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri

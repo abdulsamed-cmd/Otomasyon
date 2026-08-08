@@ -23,6 +23,7 @@ HELP = (
     "• bugün — günün düşük riskli kuponları (ana + alternatif)\n"
     "• sürpriz — 6+ Gol laboratuvarı ve sistem senaryoları\n\n"
     "• kadro — doğrulanmış ilk 11 rotasyon riskleri\n\n"
+    "• durum — ROI, CLV, xG gölge ve 6+ model sağlık raporu\n\n"
     "Not: Otomatik oynama yapılmaz; yalnızca bilgilendirme."
 )
 
@@ -45,6 +46,7 @@ class Bot:
         on_daily: Callable[[], str],
         on_surprise: Callable[[], str],
         on_lineup: Callable[[], str] | None = None,
+        on_status: Callable[[], str] | None = None,
         db=None,
         push_hour: int | None = None,
         push_callback: Callable[[], object] | None = None,
@@ -58,6 +60,7 @@ class Bot:
         self.on_daily = on_daily
         self.on_surprise = on_surprise
         self.on_lineup = on_lineup
+        self.on_status = on_status
         self.db = db
         self.push_hour = push_hour
         self.push_callback = push_callback
@@ -98,6 +101,8 @@ class Bot:
             return self.on_surprise()
         if "kadro" in text and self.on_lineup is not None:
             return self.on_lineup()
+        if "durum" in text and self.on_status is not None:
+            return self.on_status()
         return HELP
 
     def _maybe_scheduled_push(self) -> None:
