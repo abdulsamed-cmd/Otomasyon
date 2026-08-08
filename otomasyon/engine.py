@@ -71,17 +71,21 @@ class Coupon:
         return {leg.event_id for leg in self.legs}
 
 
-def _best_selection(market: NormalizedMarket) -> tuple[int, float] | None:
-    """Index and fair prob of the most likely outcome of a market."""
+def _best_selection(
+    market: NormalizedMarket, estimated_probs: list[float] | None = None
+) -> tuple[int, float] | None:
+    """Index and probability of the most likely outcome of a market."""
     odds = [o for o in market.odds if o and o > 1.0]
     if len(odds) != len(market.selections) or not odds:
         return None
-    fair = probability.fair_probs(odds)
-    best_idx = max(range(len(fair)), key=lambda i: fair[i])
-    return best_idx, fair[best_idx]
+    probs = estimated_probs or probability.fair_probs(odds)
+    if len(probs) != len(market.selections):
+        return None
+    best_idx = max(range(len(probs)), key=lambda i: probs[i])
+    return best_idx, probs[best_idx]
 
 
-def candidate_legs_for_event(event: NormalizedEvent) -> list[Leg]:
+def candidate_legs_for_event(event: NormalizedEvent, probability_provider=None) -> list[Leg]:
     """All qualifying low-risk legs an event offers (may be several)."""
     legs: list[Leg] = []
     for market in event.markets:
@@ -89,7 +93,8 @@ def candidate_legs_for_event(event: NormalizedEvent) -> list[Leg]:
             continue
         if market.code not in _PRIORITY_MARKETS:
             continue
-        best = _best_selection(market)
+        estimated = probability_provider(event, market) if probability_provider else None
+        best = _best_selection(market, estimated)
         if best is None:
             continue
         idx, fair = best
@@ -120,7 +125,12 @@ def candidate_legs_for_event(event: NormalizedEvent) -> list[Leg]:
     return legs
 
 
-def _select_pool(events: list[NormalizedEvent], now_ts: int, until_ts: int) -> list[Leg]:
+def _select_pool(
+    events: list[NormalizedEvent],
+    now_ts: int,
+    until_ts: int,
+    probability_provider=None,
+) -> list[Leg]:
     """All qualifying legs (odds within the useful band) for in-window events.
 
     Keeps every band leg (there may be several per event); the search enforces
@@ -132,7 +142,7 @@ def _select_pool(events: list[NormalizedEvent], now_ts: int, until_ts: int) -> l
             continue
         if not is_daily_eligible(ev.competition_name):
             continue
-        for leg in candidate_legs_for_event(ev):
+        for leg in candidate_legs_for_event(ev, probability_provider):
             if config.LEG_MIN_ODD <= leg.odd <= config.LEG_MAX_ODD:
                 pool.append(leg)
     return pool
@@ -142,7 +152,11 @@ def _in_window(total: float) -> bool:
     return config.DAILY_MIN_TOTAL_ODDS <= total <= config.DAILY_MAX_TOTAL_ODDS
 
 
-def _best_coupon(pool: list[Leg], exclude_events: set[int]) -> Coupon | None:
+def _best_coupon(
+    pool: list[Leg],
+    exclude_events: set[int],
+    min_expected_value: float | None = None,
+) -> Coupon | None:
     """Max combined-probability coupon (2-4 legs, distinct matches, odds in range).
 
     Pairs are searched exhaustively over the full pool (cheap, and guarantees we
@@ -161,8 +175,14 @@ def _best_coupon(pool: list[Leg], exclude_events: set[int]) -> Coupon | None:
             b = legs[j]
             if a.event_id == b.event_id:
                 continue
-            if _in_window(a.odd * b.odd):
+            total = a.odd * b.odd
+            if _in_window(total):
                 prob = a.fair_prob * b.fair_prob
+                if (
+                    min_expected_value is not None
+                    and prob * total - 1.0 < min_expected_value
+                ):
+                    continue
                 if prob > best_prob:
                     best_prob = prob
                     best_legs = [a, b]
@@ -179,6 +199,11 @@ def _best_coupon(pool: list[Leg], exclude_events: set[int]) -> Coupon | None:
             if not _in_window(total):
                 continue
             prob = probability.combined_probability(leg.fair_prob for leg in combo)
+            if (
+                min_expected_value is not None
+                and prob * total - 1.0 < min_expected_value
+            ):
+                continue
             if prob > best_prob:
                 best_prob = prob
                 best_legs = list(combo)
@@ -193,6 +218,8 @@ def _best_coupon(pool: list[Leg], exclude_events: set[int]) -> Coupon | None:
 def build_daily_coupons(
     events: list[NormalizedEvent],
     now: datetime | None = None,
+    probability_provider=None,
+    min_expected_value: float | None = None,
 ) -> dict[str, Coupon | None]:
     """Return {'main': Coupon|None, 'alt': Coupon|None} for the given bulletin."""
     now = now or datetime.now(tz=config.TIMEZONE)
@@ -200,18 +227,24 @@ def build_daily_coupons(
     end_of_today = now.replace(hour=23, minute=59, second=59, microsecond=0)
     until_ts = int(end_of_today.timestamp())
 
-    pool = _select_pool(events, now_ts, until_ts)
+    pool = _select_pool(events, now_ts, until_ts, probability_provider)
     # Fallback: if today is thin, widen the window to the next 24h.
     if len({leg.event_id for leg in pool}) < 6:
         until_ts = int((now + timedelta(hours=24)).timestamp())
-        pool = _select_pool(events, now_ts, until_ts)
+        pool = _select_pool(events, now_ts, until_ts, probability_provider)
 
-    main = _best_coupon(pool, exclude_events=set())
+    main = _best_coupon(
+        pool, exclude_events=set(), min_expected_value=min_expected_value
+    )
     if main:
         main.kind = "daily_main"
     alt = None
     if main:
-        alt = _best_coupon(pool, exclude_events=main.event_ids)
+        alt = _best_coupon(
+            pool,
+            exclude_events=main.event_ids,
+            min_expected_value=min_expected_value,
+        )
         if alt:
             alt.kind = "daily_alt"
     return {"main": main, "alt": alt}

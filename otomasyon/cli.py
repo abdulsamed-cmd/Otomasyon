@@ -280,6 +280,49 @@ def cmd_clubelo_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coupon_replay(args: argparse.Namespace) -> int:
+    from .replay import replay_daily
+
+    with Database(args.db) as db:
+        history = db.load_historical_matches()
+    report = replay_daily(
+        history,
+        start_date=args.start,
+        end_date=args.end,
+        generation_hour=args.hour,
+        calibrated=args.calibrated,
+        calibration_prior=args.calibration_prior,
+        min_expected_value=args.min_ev,
+    )
+    print("=== Günlük kupon motoru tarihsel replay ===")
+    print(
+        "Yöntem: kapanış oranı / kısmi pazar "
+        "(1X2 + Alt/Üst 2.5; 10:00 anlık oranı değildir)"
+    )
+    print(
+        "Olasılık: "
+        + (
+            f"geçmiş dönem kalibrasyonu (prior={args.calibration_prior:g})"
+            if args.calibrated
+            else "piyasa marjı arındırılmış"
+        )
+    )
+    for label, key in (
+        ("Ana", "main"),
+        ("Alternatif", "alternative"),
+        ("Toplam", "combined"),
+    ):
+        values = report[key]
+        print(
+            f"{label:11}: {values['coupons']} kupon, "
+            f"{values['won']} tuttu/{values['lost']} yatmadı, "
+            f"isabet %{values['hit_rate']*100:.1f}, "
+            f"ort. oran {values['average_odds']:.2f}, "
+            f"ROI %{values['roi']*100:.1f}"
+        )
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -400,6 +443,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_ce_test.add_argument("--end", required=True)
     p_ce_test.add_argument("--min-edge", type=float, default=config.MODEL_MIN_EDGE)
     p_ce_test.set_defaults(func=cmd_clubelo_backtest)
+
+    p_replay = sub.add_parser(
+        "coupon-replay", help="Replay production daily coupons on historical odds"
+    )
+    p_replay.add_argument("--start", required=True)
+    p_replay.add_argument("--end", required=True)
+    p_replay.add_argument("--hour", type=int, default=config.DAILY_PUSH_HOUR)
+    p_replay.add_argument("--calibrated", action="store_true")
+    p_replay.add_argument("--calibration-prior", type=float, default=100.0)
+    p_replay.add_argument(
+        "--min-ev",
+        type=float,
+        help="Minimum estimated coupon EV (e.g. 0 for non-negative)",
+    )
+    p_replay.set_defaults(func=cmd_coupon_replay)
     return parser
 
 

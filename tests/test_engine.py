@@ -77,6 +77,13 @@ def test_main_maximises_combined_probability():
     assert main.event_ids == {1, 3}
 
 
+def test_expected_value_gate_can_refuse_an_unprofitable_coupon():
+    coupons = engine.build_daily_coupons(
+        _events(), now=NOW, min_expected_value=0.0
+    )
+    assert coupons == {"main": None, "alt": None}
+
+
 def test_favorite_match_result_requires_strong_edge():
     # A near-coin-flip 1X2 must not qualify (fair prob < 0.60 threshold).
     weak = NormalizedEvent(

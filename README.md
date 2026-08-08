@@ -39,6 +39,9 @@ python3 -m otomasyon.cli backtest --test-days 30 --test-end 2026-04-30
 python3 -m otomasyon.cli clubelo                       # canlı, rapor modu
 python3 -m otomasyon.cli clubelo-backfill --start 2026-03-01 --end 2026-03-31
 python3 -m otomasyon.cli clubelo-backtest --start 2026-03-01 --end 2026-03-31
+python3 -m otomasyon.cli coupon-replay --start 2025-09-01 --end 2026-02-28
+python3 -m otomasyon.cli coupon-replay --start 2026-03-01 --end 2026-03-31 \
+  --calibrated --calibration-prior 400 --min-ev 0
 ```
 
 ## Veri kaynağı
@@ -88,6 +91,22 @@ Model varsayılan olarak yalnızca rapor/backtest modundadır
 sıfırın üstüne çıkmadan kabul kapısı geçilemez. ClubElo da ayrı bir dış görüş
 olarak aynı kurala tabidir. Bu kanıt oluşmadan iki model de Telegram kuponlarını
 etkileyemez; mesajlar açıkça "piyasa tabanlı deneme kuponu" olarak etiketlenir.
+
+### Günlük kupon replay sınırları
+
+`coupon-replay`, üretimde kullanılan ana/alternatif kupon aramasını ve settlement
+kodunu tarihsel maçlarda aynen çalıştırır. Arşiv yalnızca 1X2 ile Alt/Üst 2.5
+oranlarını içerdiğinden Çifte Şans ve KG Var/Yok geçmiş replay'e dahil değildir.
+Ayrıca oranlar 10:00 anlık görüntüsü değil, arşivdeki son maç önü oranlarıdır.
+Komut bu nedenle sonucu açıkça `closing_odds_partial` olarak etiketler.
+
+Geliştirme dönemi baz replay'inde ana kupon ROI'si `-%23,4`, alternatif ROI'si
+`-%40,7` çıktı. Mart validasyonunda geçmiş dönem kalibrasyonu ve beklenen-değer
+eşikleri de pozitif sonuç üretmedi. Bu aday canlıya alınmadı ve daha sonraki test
+dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmadı.
+
+Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/sistem
+kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
 
 ## Kurulum ve çalıştırma
 
