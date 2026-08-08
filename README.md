@@ -1,55 +1,76 @@
 # Otomasyon
 
-A small automation-rules dashboard. Create automation rules (with a trigger and
-an action), enable/disable them, and "run" them on demand — every run is recorded
-in a live run log. Built with a plain **Express** JSON API and a dependency-free
-**vanilla JS** frontend so it runs anywhere with just Node.js.
+İddaa futbol bülteninden **düşük riskli günlük kupon** üreten, ayrıca haftalık
+bir **"sürpriz laboratuvarı"** (İY/MS 1/2 · 2/1 ve 6+ gol adayları) çalıştıran
+bir asistan. **Otomatik oynama yapmaz** — kupon hazırlar, Telegram'dan
+bilgilendirir ve sonuçları takip ederek performans metriklerini (isabet, ROI,
+ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 
-## Tech stack
+> Bilgilendirme amaçlıdır; bahis oynatmaz ve finansal tavsiye değildir.
 
-- **Runtime:** Node.js 20+ (developed on Node 22)
-- **Server:** Express 4 (`src/app.js`, `src/server.js`)
-- **State:** in-memory store (`src/store.js`) — no database required
-- **Frontend:** static HTML/CSS/JS in `public/`
-- **Tests:** Jest + Supertest (`test/`)
+## Durum (yol haritası)
 
-## Getting started
+- [x] Veri kaynağı keşfi — iddaa genel JSON API (`sportsbookv2.iddaa.com`)
+- [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
+- [ ] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
+- [ ] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
+- [ ] Telegram botu (`bugün` / `sürpriz`, tek kullanıcı)
+- [ ] Sonuç takibi + metrikler (Mackolik arşivi)
+- [ ] Kendi olasılık modelimiz (ROI/CLV)
+
+## Veri kaynağı
+
+Kırılgan HTML kazıma yerine iddaa'nın **kimlik doğrulaması gerektirmeyen
+JSON API'si** kullanılır:
+
+| Amaç | Uç nokta |
+| --- | --- |
+| Futbol bülteni + oranlar | `GET /sportsbook/events?st=1&type=0&version=0` |
+| Tek maç | `GET /sportsbook/event/{id}` |
+| Pazar sözlüğü (isimler) | `GET /sportsbook/get_market_config` |
+| Ligler | `GET /sportsbook/competitions?st=1` |
+
+Pazar isimleri her zaman `get_market_config`'ten çözülür (kod: `f"{t}_{st}"`).
+Maç sonuçları ve geçmiş veri (settlement + model) Mackolik arşivinden alınacaktır.
+
+## Kurulum ve çalıştırma
 
 ```bash
-npm ci        # install dependencies from the lockfile
-npm start     # start the dashboard on http://localhost:3000
+python3 -m pip install -r requirements-dev.txt
+
+# Bugünkü futbol bültenini çek, SQLite'a yaz ve 3 örnek maç göster
+python3 -m otomasyon.cli fetch --sample 3
 ```
 
-For development with auto-reload:
+Veritabanı varsayılan olarak `data/otomasyon.db` (git'e dahil değil).
+`OTOMASYON_DB` ortam değişkeni ile yol değiştirilebilir.
+
+## Testler
 
 ```bash
-npm run dev
+python3 -m pytest -q
 ```
 
-## Scripts
+## Yapı
 
-| Command        | Description                                  |
-| -------------- | -------------------------------------------- |
-| `npm start`    | Run the production server (`src/server.js`)  |
-| `npm run dev`  | Run with nodemon auto-reload                 |
-| `npm test`     | Run the Jest + Supertest suite               |
-| `npm run lint` | Lint the codebase with ESLint                |
+```
+otomasyon/
+  config.py            # sabitler, saat dilimi (Europe/Istanbul), pazar kodları
+  probability.py       # implied/fair (marj çıkarma) olasılık yardımcıları
+  iddaa/
+    client.py          # iddaa JSON API istemcisi
+    markets.py         # (t,st) -> pazar adı çözücü
+    normalize.py       # ham JSON -> tipli domain nesneleri
+  storage/
+    schema.sql         # SQLite şeması (event/market/oran geçmişi/kupon/sonuç)
+    db.py              # kalıcılık katmanı
+  cli.py               # `fetch` komutu
+tests/                 # pytest
+```
 
-## API
+## Gizli anahtarlar (secrets)
 
-| Method   | Path                  | Description                         |
-| -------- | --------------------- | ----------------------------------- |
-| `GET`    | `/api/health`         | Health check                        |
-| `GET`    | `/api/rules`          | List automation rules               |
-| `POST`   | `/api/rules`          | Create a rule (`name`, `trigger`, `action`) |
-| `PATCH`  | `/api/rules/:id`      | Enable/disable a rule (`enabled`)   |
-| `DELETE` | `/api/rules/:id`      | Delete a rule                       |
-| `POST`   | `/api/rules/:id/run`  | Run a rule (records a run log entry)|
-| `GET`    | `/api/runs`           | List recorded runs                  |
+Telegram için kod, ortam değişkenlerinden okur — repoda **token tutulmaz**:
 
-`trigger` must be one of `manual`, `schedule`, or `webhook`.
-
-## Cloud Agent environment
-
-This repository ships a [`.cursor/environment.json`](.cursor/environment.json)
-that installs dependencies with `npm ci` and starts the dashboard on port 3000.
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_USERNAME` (yalnızca bu kullanıcı botla konuşabilir)

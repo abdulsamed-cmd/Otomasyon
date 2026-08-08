@@ -1,5 +1,18 @@
-node_modules/
-coverage/
-*.log
-.DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Local data / secrets
+data/
+*.db
+*.db-wal
+*.db-shm
 .env
+
+# OS
+.DS_Store

@@ -1,16 +1,4 @@
 {
   "name": "Otomasyon",
-  "install": "npm ci",
-  "terminals": [
-    {
-      "name": "dev-server",
-      "command": "npm start"
-    }
-  ],
-  "ports": [
-    {
-      "name": "Otomasyon dashboard",
-      "port": 3000
-    }
-  ]
+  "install": "python3 -m pip install --user -r requirements-dev.txt"
 }
