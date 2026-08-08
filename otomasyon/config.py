@@ -86,6 +86,9 @@ SURPRISE_PER_CATEGORY = 3
 SURPRISE_SYSTEM_SIZE = 6
 # Theoretical unit stake per column (TL) used to show minimum system cost.
 SURPRISE_UNIT_STAKE = 20.0
+# Canonical scenario used for the surprise process evidence gate. Other system
+# sizes are still persisted and reported, but are not pooled into this ROI.
+SURPRISE_TRACK_SYSTEM_SIZE = 2
 
 # --- Proactive delivery ----------------------------------------------------
 # Local hour (Europe/Istanbul) at which the daily coupon is pushed to the user
@@ -114,6 +117,18 @@ MODEL_ELO_BLEND = 0.45
 MODEL_LIVE_ENABLED = False
 MODEL_GATE_MIN_BETS = 200
 MODEL_GATE_MIN_ROI_CI_LOW = 0.0
+
+# Independent evidence gates. Main, alternative and surprise results are never
+# pooled because they represent different risk processes.
+PERFORMANCE_GATE_MIN_COUPONS = {
+    "daily_main": 200,
+    "daily_alt": 200,
+    "surprise": 100,
+}
+
+# --- Private dashboard -----------------------------------------------------
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
+DASHBOARD_SECRET_KEY = os.environ.get("DASHBOARD_SECRET_KEY")
 
 
 def telegram_bot_token() -> str | None:

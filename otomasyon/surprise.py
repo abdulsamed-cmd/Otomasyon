@@ -21,6 +21,7 @@ from itertools import combinations
 from math import comb
 
 from . import config, probability
+from .eligibility import is_event_eligible
 from .iddaa.normalize import NormalizedEvent
 
 
@@ -87,6 +88,8 @@ def find_candidates(
     out: list[SurpriseCandidate] = []
     for ev in events:
         if not (now_ts < ev.start_ts <= until_ts):
+            continue
+        if not is_event_eligible(ev.competition_name, ev.home, ev.away):
             continue
         market = ev.market(market_code)
         if market is None or market.status != 1:

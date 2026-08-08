@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Kupon #{{ coupon.id }} · Otomasyon{% endblock %}
+{% block content %}
+<section class="detail-header">
+  <a href="{{ url_for('coupons') }}">← Kupon arşivi</a>
+  <div class="detail-title">
+    <div>
+      <p class="eyebrow">{{ kind_label(coupon.kind) }}</p>
+      <h1>{{ coupon.for_date }} kuponu</h1>
+    </div>
+    <div class="total-odd"><span>Toplam oran</span><strong>{{ "%.2f"|format(coupon.total_odds) }}</strong></div>
+  </div>
+</section>
+<div class="legs">
+{% for leg in coupon.legs %}
+  <article class="leg">
+    <div class="leg-index">{{ loop.index }}</div>
+    <div class="leg-main">
+      <h3>{{ leg.home }} — {{ leg.away }}</h3>
+      <p>{{ leg.market_name }}{% if leg.market_sov %} · {{ leg.market_sov }}{% endif %}</p>
+    </div>
+    <div class="pick"><span>Seçim</span><b>{{ leg.outcome_name }}</b></div>
+    <div class="pick"><span>Oran</span><b>{{ "%.2f"|format(leg.odd_at_creation) }}</b></div>
+    <span class="status {{ leg.result }}">{{ {'win':'Tuttu','lose':'Yattı','void':'İade','pending':'Bekliyor'}.get(leg.result, leg.result) }}</span>
+  </article>
+{% endfor %}
+</div>
+<aside class="private-note">Bu detaylar açık performans sayfasında yayınlanmaz.</aside>
+{% endblock %}

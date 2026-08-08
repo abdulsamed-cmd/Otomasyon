@@ -1,0 +1,28 @@
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OTOMASYON_DB: /app/data/otomasyon.db
+      DASHBOARD_SECURE_COOKIE: "${DASHBOARD_SECURE_COOKIE:-0}"
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      - otomasyon-data:/app/data
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OTOMASYON_DB: /app/data/otomasyon.db
+    command: ["python", "-u", "-m", "otomasyon.cli", "bot"]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    volumes:
+      - otomasyon-data:/app/data
+
+volumes:
+  otomasyon-data:

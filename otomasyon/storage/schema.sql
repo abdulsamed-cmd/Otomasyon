@@ -242,3 +242,40 @@ CREATE TABLE IF NOT EXISTS results (
     updated_ts   INTEGER NOT NULL,
     FOREIGN KEY (event_id) REFERENCES events(id)
 );
+
+-- Weekly surprise laboratory is intentionally separate from daily coupons.
+CREATE TABLE IF NOT EXISTS surprise_reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_key    TEXT NOT NULL UNIQUE, -- ISO year-week
+    created_ts    INTEGER NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS surprise_candidates (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id     INTEGER NOT NULL,
+    event_id      INTEGER NOT NULL,
+    category      TEXT NOT NULL,
+    market_t      INTEGER NOT NULL,
+    market_st     INTEGER NOT NULL,
+    market_sov    TEXT,
+    outcome_name  TEXT NOT NULL,
+    odd           REAL NOT NULL,
+    fair_prob     REAL,
+    in_system     INTEGER NOT NULL DEFAULT 0,
+    result        TEXT NOT NULL DEFAULT 'pending',
+    UNIQUE (report_id, event_id, category),
+    FOREIGN KEY (report_id) REFERENCES surprise_reports(id) ON DELETE CASCADE,
+    FOREIGN KEY (event_id) REFERENCES events(id)
+);
+
+CREATE TABLE IF NOT EXISTS surprise_scenarios (
+    report_id     INTEGER NOT NULL,
+    system_size   INTEGER NOT NULL,
+    columns       INTEGER NOT NULL,
+    unit_stake    REAL NOT NULL,
+    profit        REAL,
+    roi           REAL,
+    PRIMARY KEY (report_id, system_size),
+    FOREIGN KEY (report_id) REFERENCES surprise_reports(id) ON DELETE CASCADE
+);

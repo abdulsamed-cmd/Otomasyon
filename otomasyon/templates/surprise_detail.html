@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ report.period_key }} sürpriz raporu · Otomasyon{% endblock %}
+{% block content %}
+<section class="detail-header">
+  <a href="{{ url_for('surprises') }}">← Sürpriz arşivi</a>
+  <div class="detail-title">
+    <div>
+      <p class="eyebrow">YÜKSEK RİSK · AYRI SÜREÇ</p>
+      <h1>{{ report.period_key }}</h1>
+    </div>
+    <span class="status {{ report.status }}">{{ 'Sonuçlandı' if report.status == 'settled' else 'Bekliyor' }}</span>
+  </div>
+</section>
+<div class="legs">
+{% for item in report.candidates %}
+  <article class="leg">
+    <div class="leg-index">{{ loop.index }}</div>
+    <div class="leg-main">
+      <h3>{{ item.home }} — {{ item.away }}</h3>
+      <p>{{ {'htft_12':'İY/MS 1/2','htft_21':'İY/MS 2/1','goals_6plus':'6+ Gol'}.get(item.category, item.category) }}{% if item.in_system %} · Sistem seti{% endif %}</p>
+    </div>
+    <div class="pick"><span>Seçim</span><b>{{ item.outcome_name }}</b></div>
+    <div class="pick"><span>Oran</span><b>{{ "%.2f"|format(item.odd) }}</b></div>
+    <span class="status {{ item.result }}">{{ {'win':'Tuttu','lose':'Yattı','void':'İade','pending':'Bekliyor'}.get(item.result, item.result) }}</span>
+  </article>
+{% endfor %}
+</div>
+<section class="scenario-grid">
+{% for scenario in report.scenarios %}
+  <article class="scenario-card">
+    <span>{{ scenario.system_size }}/{{ report.system_count }} sistem</span>
+    <b>{{ scenario.columns }} kolon</b>
+    <small>{{ "%.0f"|format(scenario.columns * scenario.unit_stake) }} TL teorik maliyet</small>
+    {% if scenario.roi is not none %}<strong class="{{ 'positive' if scenario.roi > 0 else 'negative' }}">ROI %{{ "%+.1f"|format(scenario.roi * 100) }}</strong>{% endif %}
+  </article>
+{% endfor %}
+</section>
+<aside class="private-note">Bu süreç günlük ana/alternatif kuponların performansına dahil edilmez.</aside>
+{% endblock %}

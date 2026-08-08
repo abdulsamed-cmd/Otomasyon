@@ -6,13 +6,14 @@ from otomasyon.replay import replay_daily
 
 def _row(index: int, total_goals: int) -> dict:
     start = datetime(2026, 3, 10, 13 + index, tzinfo=config.TIMEZONE)
+    suffix = ("Alpha", "Bravo", "Charlie", "Delta")[index]
     return {
         "source_id": str(index),
         "start_ts": int(start.timestamp()),
         "match_date": "2026-03-10",
         "competition": "Test Lig",
-        "home": f"Home {index}",
-        "away": f"Away {index}",
+        "home": f"Home {suffix}",
+        "away": f"Away {suffix}",
         "ft_home": total_goals,
         "ft_away": 0,
         "ht_home": 0,

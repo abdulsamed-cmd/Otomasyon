@@ -14,13 +14,17 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
 - [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
 - [x] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
+- [x] Sürpriz aday/sonuç persistence + 2'li sistem teorik ROI kapısı
 - [x] Telegram botu (`bugün` / `sürpriz` / `kadro`, tek kullanıcı) + proaktif gönderim
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
+- [x] Kapanış oranı capture'ı ve seçim bazlı CLV
 - [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
   15 dakikalık oto-settlement ve Telegram sonuç bildirimi
 - [x] Bağlamsal gol modeli + opponent-adjusted Elo + pazar bazlı kronolojik backtest
 - [x] İstatistiksel ROI kabul kapısı + bağımsız ClubElo rapor/validasyon katmanı
 - [x] FotMob xG/doğrulanmış kadro capture katmanı (rapor modu)
+- [x] Açık performans / şifreli kupon detaylı responsive web dashboard
+- [x] Docker Compose ile kalıcı disk, bot ve dashboard servisleri
 - [ ] Bağlamsal capture sonuçlarını biriktirme ve pozitif holdout kanıtı
 
 ### Komutlar
@@ -46,6 +50,7 @@ python3 -m otomasyon.cli coupon-replay --start 2026-03-01 --end 2026-03-31 \
 python3 -m otomasyon.cli fotmob-context --detail-window 2 --detail-limit 30
 python3 -m otomasyon.cli fotmob-lineup-backfill --per-team 1
 python3 -m otomasyon.cli lineup-risk --high-rotation 5
+python3 -m gunicorn --bind 0.0.0.0:8080 otomasyon.web:app
 ```
 
 ## Veri kaynağı
@@ -118,6 +123,8 @@ dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmad
 
 Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/sistem
 kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
+Her iki süreç de hazırlık, genç ve rezerv liglerinin yanında takım adındaki
+`II`, `B`, `2`, `Academy` ve `Uxx` rezerv işaretlerini dışlar.
 
 ### xG ve doğrulanmış kadro capture'ı
 
@@ -134,6 +141,36 @@ Oyuncu kimlikleri, pozisyonları ve mevcut piyasa değerleri ayrıca saklanır.
 Önceki resmi maçın ilk 11'iyle devamlılık karşılaştırması yapılır; beş veya
 daha fazla değişiklik şimdilik yalnız `kadro` komutunda risk uyarısı üretir ve
 kupon seçimini değiştirmez.
+
+## Web dashboard
+
+`/` yalnız toplu ve sonuçlanmış verileri gösterir: ana, alternatif ve sürpriz
+için ayrı kupon sayısı, isabet, ortalama oran, ROI ve kanıt kapısı. Açık
+response'a takım, maç, pazar veya seçim alanları gönderilmez.
+
+`/coupons` ve `/coupons/<id>` şifreli oturum gerektirir. Telegram'da paylaşılan
+bekleyen ve geçmiş kuponların takım/pazar/seçim detayları yalnız burada görünür.
+`/surprises` ise haftalık adayları ve her sistem boyutunun teorik maliyet/ROI
+sonucunu ayrı bir özel arşivde tutar. Sürpriz kanıt kapısı yalnız sabit 2'li
+sistem senaryosunu takip eder; farklı sistem boyutlarının sonuçları birbirine
+karıştırılmaz.
+Şifre ve Flask oturum anahtarı sırasıyla `DASHBOARD_PASSWORD` ve
+`DASHBOARD_SECRET_KEY` secret'larından okunur. HTTPS arkasında
+`DASHBOARD_SECURE_COOKIE=1` kullanılmalıdır.
+
+## Kalıcı deployment
+
+```bash
+cp .env.example .env
+# .env içindeki gerçek Telegram ve dashboard secret'larını doldurun.
+docker compose up -d --build
+curl http://localhost:8080/healthz
+```
+
+Compose iki servis çalıştırır: Gunicorn dashboard ve Telegram/veri-toplama botu.
+İkisi `otomasyon-data` adlı kalıcı volume üzerindeki aynı WAL-mode SQLite
+veritabanını kullanır. Bot dashboard health check'i geçmeden başlamaz. Sunucu
+yeniden başladığında iki servis de `unless-stopped` politikasıyla geri gelir.
 
 ## Kurulum ve çalıştırma
 

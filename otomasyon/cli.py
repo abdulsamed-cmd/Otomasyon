@@ -45,7 +45,7 @@ def cmd_coupon(args: argparse.Namespace) -> int:
 
 def cmd_surprise(args: argparse.Namespace) -> int:
     print("Bülten çekiliyor...")
-    print("\n" + service.surprise_text())
+    print("\n" + service.surprise_text(args.db))
     return 0
 
 
@@ -68,7 +68,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         client,
         username,
         on_daily=lambda: service.daily_text(args.db),
-        on_surprise=service.surprise_text,
+        on_surprise=lambda: service.surprise_text(args.db),
         on_lineup=lambda: service.lineup_risk_text(args.db),
         db=db,
         push_hour=config.DAILY_PUSH_HOUR,
@@ -121,6 +121,7 @@ def cmd_settle(args: argparse.Namespace) -> int:
 
 def cmd_metrics(args: argparse.Namespace) -> int:
     m = service.metrics(args.db)
+    by_kind = service.metrics_by_kind(args.db)
     print("=== Performans metrikleri (düz 1 birim bahis) ===")
     print(f"  Sonuçlanan kupon : {m['coupons_played']} (toplam {m['coupons_total']})")
     print(f"  Tutan            : {m['won']}")
@@ -128,6 +129,15 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     print(f"  Ortalama oran    : {m['avg_odds']:.2f}")
     print(f"  Kâr/Zarar        : {m['profit']:+.2f} birim")
     print(f"  ROI              : %{m['roi'] * 100:.1f}")
+    print("\n=== Bağımsız kanıt kapıları ===")
+    for kind, item in by_kind.items():
+        status = "GEÇTİ" if item["gate_passed"] else "BEKLİYOR"
+        print(
+            f"  {kind:12} {item['coupons']:4}/{item['minimum_coupons']} kupon | "
+            f"ROI %{item['roi']*100:+.1f} | "
+            f"%95 %{item['roi_ci95'][0]*100:+.1f}.."
+            f"%{item['roi_ci95'][1]*100:+.1f} | {status}"
+        )
     return 0
 
 

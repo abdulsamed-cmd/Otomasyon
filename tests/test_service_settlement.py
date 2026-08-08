@@ -56,6 +56,10 @@ def test_settle_pending_marks_won_and_metrics(tmp_path):
     assert m["won"] == 1
     assert m["hit_rate"] == 1.0
     assert round(m["avg_odds"], 2) == 2.10
+    split = service.metrics_by_kind(path)
+    assert split["daily_main"]["coupons"] == 1
+    assert split["daily_main"]["gate_passed"] is False
+    assert split["daily_alt"]["coupons"] == 0
     assert round(m["roi"], 2) == 1.10
 
 

@@ -8,6 +8,9 @@ ready-to-send text.
 from __future__ import annotations
 
 import time
+import math
+import statistics
+from itertools import combinations
 from datetime import date, datetime, timedelta
 
 from . import config, engine, formatting, settlement, surprise
@@ -54,9 +57,19 @@ def daily_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
     return formatting.format_daily(coupons, for_date)
 
 
-def surprise_text() -> str:
-    events, _ = get_live_events()
-    report = surprise.build_surprise(events, now=datetime.now(tz=config.TIMEZONE))
+def surprise_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
+    events, competitions = get_live_events()
+    now = datetime.now(tz=config.TIMEZONE)
+    report = surprise.build_surprise(events, now=now)
+    if save and report.has_candidates:
+        iso_year, iso_week, _ = now.isocalendar()
+        period_key = f"{iso_year}-W{iso_week:02d}"
+        with Database(db_path) as db:
+            db.upsert_competitions(competitions)
+            db.save_events(events, now=int(now.timestamp()))
+            db.save_surprise_report(
+                report, period_key, now=int(now.timestamp())
+            )
     return formatting.format_surprise(report)
 
 
@@ -146,6 +159,191 @@ def metrics(db_path: str) -> dict:
     }
 
 
+def metrics_by_kind(db_path: str) -> dict[str, dict]:
+    """Independent performance and evidence gates for each coupon process."""
+    with Database(db_path) as db:
+        coupons = db.settled_coupons()
+    output = {}
+    kinds = set(config.PERFORMANCE_GATE_MIN_COUPONS) | {
+        coupon["kind"] for coupon in coupons
+    }
+    for kind in sorted(kinds):
+        selected = [
+            coupon
+            for coupon in coupons
+            if coupon["kind"] == kind and coupon["status"] in ("won", "lost")
+        ]
+        profits = []
+        odds = []
+        clv_values = []
+        for coupon in selected:
+            effective = 1.0
+            for leg in coupon["legs"]:
+                if leg["result"] == "win":
+                    effective *= leg["odd"]
+                if leg.get("closing_odd") and leg["closing_odd"] > 1.0:
+                    clv_values.append(
+                        leg["odd"] / leg["closing_odd"] - 1.0
+                    )
+            odds.append(effective)
+            profits.append(effective - 1.0 if coupon["status"] == "won" else -1.0)
+        roi = statistics.mean(profits) if profits else 0.0
+        margin = (
+            1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
+            if len(profits) > 1
+            else 0.0
+        )
+        minimum = config.PERFORMANCE_GATE_MIN_COUPONS.get(kind, 200)
+        output[kind] = {
+            "coupons": len(selected),
+            "won": sum(coupon["status"] == "won" for coupon in selected),
+            "hit_rate": (
+                sum(coupon["status"] == "won" for coupon in selected)
+                / len(selected)
+                if selected
+                else 0.0
+            ),
+            "avg_odds": statistics.mean(odds) if odds else 0.0,
+            "avg_clv": statistics.mean(clv_values) if clv_values else None,
+            "clv_samples": len(clv_values),
+            "roi": roi,
+            "roi_ci95": (roi - margin, roi + margin),
+            "minimum_coupons": minimum,
+            "gate_passed": len(selected) >= minimum and roi - margin > 0.0,
+        }
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT ss.roi, ss.profit, ss.columns, ss.unit_stake
+            FROM surprise_scenarios ss
+            JOIN surprise_reports sr ON sr.id=ss.report_id
+            WHERE sr.status='settled' AND ss.system_size=?
+              AND ss.roi IS NOT NULL
+            """,
+            (config.SURPRISE_TRACK_SYSTEM_SIZE,),
+        ).fetchall()
+    report_rois = [row["roi"] for row in rows]
+    total_stake = sum(row["columns"] * row["unit_stake"] for row in rows)
+    total_profit = sum(row["profit"] for row in rows)
+    surprise_roi = total_profit / total_stake if total_stake else 0.0
+    surprise_margin = (
+        1.96 * statistics.stdev(report_rois) / math.sqrt(len(report_rois))
+        if len(report_rois) > 1
+        else 0.0
+    )
+    minimum = config.PERFORMANCE_GATE_MIN_COUPONS["surprise"]
+    output["surprise"] = {
+        "coupons": len(rows),
+        "won": sum(row["profit"] > 0 for row in rows),
+        "hit_rate": (
+            sum(row["profit"] > 0 for row in rows) / len(rows) if rows else 0.0
+        ),
+        "avg_odds": 0.0,
+        "avg_clv": None,
+        "clv_samples": 0,
+        "roi": surprise_roi,
+        "roi_ci95": (
+            surprise_roi - surprise_margin,
+            surprise_roi + surprise_margin,
+        ),
+        "minimum_coupons": minimum,
+        "gate_passed": (
+            len(rows) >= minimum and surprise_roi - surprise_margin > 0.0
+        ),
+        "system_size": config.SURPRISE_TRACK_SYSTEM_SIZE,
+    }
+    return output
+
+
+def settle_surprise_reports(db_path: str) -> int:
+    """Settle candidate outcomes and theoretical system returns."""
+    settled_reports = 0
+    with Database(db_path) as db:
+        reports = db.conn.execute(
+            "SELECT id FROM surprise_reports WHERE status='pending'"
+        ).fetchall()
+        for report in reports:
+            candidates = db.conn.execute(
+                "SELECT * FROM surprise_candidates WHERE report_id=?",
+                (report["id"],),
+            ).fetchall()
+            for candidate in candidates:
+                if candidate["result"] != "pending":
+                    continue
+                result = db.get_result(candidate["event_id"])
+                if result is None:
+                    continue
+                leg_result = settlement.settle_leg(
+                    candidate["market_t"],
+                    candidate["market_st"],
+                    candidate["market_sov"],
+                    candidate["outcome_name"],
+                    result,
+                )
+                db.conn.execute(
+                    "UPDATE surprise_candidates SET result=? WHERE id=?",
+                    (leg_result, candidate["id"]),
+                )
+            remaining = db.conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM surprise_candidates
+                WHERE report_id=? AND result='pending'
+                """,
+                (report["id"],),
+            ).fetchone()["n"]
+            if remaining:
+                db.conn.commit()
+                continue
+            system_candidates = [
+                dict(row)
+                for row in db.conn.execute(
+                    """
+                    SELECT * FROM surprise_candidates
+                    WHERE report_id=? AND in_system=1
+                    """,
+                    (report["id"],),
+                ).fetchall()
+            ]
+            scenarios = db.conn.execute(
+                "SELECT * FROM surprise_scenarios WHERE report_id=?",
+                (report["id"],),
+            ).fetchall()
+            for scenario in scenarios:
+                total_return = 0.0
+                for column in combinations(
+                    system_candidates, scenario["system_size"]
+                ):
+                    if any(item["result"] == "lose" for item in column):
+                        continue
+                    effective = 1.0
+                    for item in column:
+                        if item["result"] == "win":
+                            effective *= item["odd"]
+                    total_return += effective * scenario["unit_stake"]
+                stake = scenario["columns"] * scenario["unit_stake"]
+                profit = total_return - stake
+                roi = profit / stake if stake else 0.0
+                db.conn.execute(
+                    """
+                    UPDATE surprise_scenarios SET profit=?, roi=?
+                    WHERE report_id=? AND system_size=?
+                    """,
+                    (
+                        profit,
+                        roi,
+                        report["id"],
+                        scenario["system_size"],
+                    ),
+                )
+            db.conn.execute(
+                "UPDATE surprise_reports SET status='settled' WHERE id=?",
+                (report["id"],),
+            )
+            db.conn.commit()
+            settled_reports += 1
+    return settled_reports
+
+
 def auto_results(
     db_path: str,
     telegram_client=None,
@@ -168,6 +366,7 @@ def auto_results(
         if not force and now_ts - last < config.RESULT_POLL_INTERVAL_SECONDS:
             return {"skipped": True, "reason": "rate_limited", "matched": 0, "settled": 0}
         pending = db.get_pending_coupons()
+        pending_surprise = db.pending_surprise_events()
 
     targets_by_id: dict[int, dict] = {}
     for coupon in pending:
@@ -178,6 +377,13 @@ def auto_results(
                 "away": leg["away"],
                 "start_ts": leg["start_ts"],
             }
+    for event in pending_surprise:
+        targets_by_id[event["event_id"]] = {
+            "event_id": event["event_id"],
+            "home": event["home"],
+            "away": event["away"],
+            "start_ts": event["start_ts"],
+        }
     if not targets_by_id:
         with Database(db_path) as db:
             db.set_setting("last_result_poll_ts", str(now_ts))
@@ -207,10 +413,12 @@ def auto_results(
     decided = settle_pending(
         db_path, telegram_client, notify=telegram_client is not None
     )
+    surprise_settled = settle_surprise_reports(db_path)
     return {
         "skipped": False,
         "matched": len(matched),
         "settled": len(decided),
+        "surprise_settled": surprise_settled,
         "dates": [day.isoformat() for day in days],
         "diagnostics": diagnostics,
     }

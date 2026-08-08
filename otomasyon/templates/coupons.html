@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Özel kuponlar · Otomasyon{% endblock %}
+{% block content %}
+<section class="private-header">
+  <div>
+    <p class="eyebrow">ŞİFRELİ ALAN</p>
+    <h1>Kupon arşivi</h1>
+    <p>Maç ve seçim detayları yalnız bu oturumda görüntülenir.</p>
+  </div>
+  <span class="secure-badge">Korumalı</span>
+</section>
+<div class="coupon-list">
+{% for coupon in coupons %}
+  <a class="coupon-row" href="{{ url_for('coupon_detail', coupon_id=coupon.id) }}">
+    <div><b>{{ coupon.for_date }}</b><span>{{ kind_label(coupon.kind) }}</span></div>
+    <div><b>{{ coupon.leg_count }}</b><span>Seçim</span></div>
+    <div><b>{{ "%.2f"|format(coupon.total_odds) }}</b><span>Toplam oran</span></div>
+    <span class="status {{ coupon.status }}">{{ {'won':'Tuttu','lost':'Yattı','void':'İade','pending':'Bekliyor'}.get(coupon.status, coupon.status) }}</span>
+    <i>→</i>
+  </a>
+{% else %}
+  <p class="empty-card">Henüz kaydedilmiş kupon yok.</p>
+{% endfor %}
+</div>
+{% endblock %}

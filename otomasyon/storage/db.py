@@ -262,6 +262,17 @@ class Database:
         """
         now = now or int(time.time())
         cur = self.conn.cursor()
+        if coupon.kind in ("daily_main", "daily_alt"):
+            existing = cur.execute(
+                """
+                SELECT id FROM coupons
+                WHERE kind=? AND for_date=?
+                ORDER BY id LIMIT 1
+                """,
+                (coupon.kind, for_date),
+            ).fetchone()
+            if existing is not None:
+                return existing["id"]
         cur.execute(
             """
             INSERT INTO coupons
@@ -288,6 +299,80 @@ class Database:
             )
         self.conn.commit()
         return coupon_id
+
+    def save_surprise_report(
+        self, report, period_key: str, *, now: int | None = None
+    ) -> int:
+        """Persist one immutable weekly surprise shortlist and system set."""
+        now = now or int(time.time())
+        existing = self.conn.execute(
+            "SELECT id FROM surprise_reports WHERE period_key=?", (period_key,)
+        ).fetchone()
+        if existing is not None:
+            return existing["id"]
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO surprise_reports (period_key, created_ts, status)
+            VALUES (?, ?, 'pending')
+            """,
+            (period_key, now),
+        )
+        report_id = cur.lastrowid
+        system_keys = {
+            (candidate.category, candidate.event_id)
+            for candidate in report.system_set
+        }
+        for category, candidates in report.by_category.items():
+            market_t, market_st = config.SURPRISE_CATEGORIES[category][0]
+            for candidate in candidates:
+                cur.execute(
+                    """
+                    INSERT INTO surprise_candidates
+                        (report_id, event_id, category, market_t, market_st,
+                         market_sov, outcome_name, odd, fair_prob, in_system)
+                    VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    (
+                        report_id,
+                        candidate.event_id,
+                        category,
+                        market_t,
+                        market_st,
+                        candidate.outcome_name,
+                        candidate.odd,
+                        candidate.fair_prob,
+                        int((category, candidate.event_id) in system_keys),
+                    ),
+                )
+        for scenario in report.scenarios:
+            cur.execute(
+                """
+                INSERT INTO surprise_scenarios
+                    (report_id, system_size, columns, unit_stake)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    scenario.size,
+                    scenario.columns,
+                    scenario.unit_stake,
+                ),
+            )
+        self.conn.commit()
+        return report_id
+
+    def pending_surprise_events(self) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT sc.event_id, e.home, e.away, e.start_ts
+            FROM surprise_candidates sc
+            JOIN surprise_reports sr ON sr.id=sc.report_id
+            JOIN events e ON e.id=sc.event_id
+            WHERE sr.status='pending' AND sc.result='pending'
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # -- historical model data --------------------------------------------
     def save_historical_matches(self, matches) -> int:
@@ -700,7 +785,51 @@ class Database:
             "UPDATE coupons SET status = ? WHERE id = ?",
             (settlement.status, coupon_id),
         )
+        self.populate_closing_odds(coupon_id)
         self.conn.commit()
+
+    def populate_closing_odds(self, coupon_id: int) -> int:
+        """Store the final captured pre-kickoff price for each coupon leg."""
+        legs = self.conn.execute(
+            """
+            SELECT cl.id, cl.event_id, cl.market_t, cl.market_st,
+                   cl.market_sov, cl.outcome_no, e.start_ts
+            FROM coupon_legs cl
+            JOIN events e ON e.id=cl.event_id
+            WHERE cl.coupon_id=?
+            """,
+            (coupon_id,),
+        ).fetchall()
+        updated = 0
+        for leg in legs:
+            closing = self.conn.execute(
+                """
+                SELECT os.odd
+                FROM markets m
+                JOIN selections s ON s.market_id=m.id
+                JOIN odds_snapshots os ON os.selection_id=s.id
+                WHERE m.event_id=? AND m.t=? AND m.st=?
+                  AND COALESCE(m.sov, '')=COALESCE(?, '')
+                  AND s.outcome_no=? AND os.captured_ts<?
+                ORDER BY os.captured_ts DESC, os.id DESC
+                LIMIT 1
+                """,
+                (
+                    leg["event_id"],
+                    leg["market_t"],
+                    leg["market_st"],
+                    leg["market_sov"],
+                    leg["outcome_no"],
+                    leg["start_ts"],
+                ),
+            ).fetchone()
+            if closing is not None:
+                self.conn.execute(
+                    "UPDATE coupon_legs SET closing_odd=? WHERE id=?",
+                    (closing["odd"], leg["id"]),
+                )
+                updated += 1
+        return updated
 
     def settled_coupons(self) -> list[dict]:
         """Decided coupons with their legs, for metrics."""
@@ -710,7 +839,10 @@ class Database:
         out = []
         for c in coupons:
             legs = self.conn.execute(
-                "SELECT result, odd_at_creation FROM coupon_legs WHERE coupon_id = ?",
+                """
+                SELECT result, odd_at_creation, closing_odd
+                FROM coupon_legs WHERE coupon_id = ?
+                """,
                 (c["id"],),
             ).fetchall()
             out.append(
@@ -720,12 +852,107 @@ class Database:
                     "status": c["status"],
                     "for_date": c["for_date"],
                     "legs": [
-                        {"result": leg["result"], "odd": leg["odd_at_creation"]}
+                        {
+                            "result": leg["result"],
+                            "odd": leg["odd_at_creation"],
+                            "closing_odd": leg["closing_odd"],
+                        }
                         for leg in legs
                     ],
                 }
             )
         return out
+
+    def dashboard_coupon_summaries(
+        self, *, limit: int = 100, settled_only: bool = False
+    ) -> list[dict]:
+        where = (
+            "WHERE c.status IN ('won','lost','void')" if settled_only else ""
+        )
+        rows = self.conn.execute(
+            f"""
+            SELECT c.id, c.kind, c.created_ts, c.for_date, c.total_odds,
+                   c.combined_prob, c.status, COUNT(cl.id) AS leg_count
+            FROM coupons c
+            LEFT JOIN coupon_legs cl ON cl.coupon_id=c.id
+            {where}
+            GROUP BY c.id
+            ORDER BY c.created_ts DESC, c.id DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def dashboard_coupon(self, coupon_id: int) -> dict | None:
+        coupon = self.conn.execute(
+            "SELECT * FROM coupons WHERE id=?", (coupon_id,)
+        ).fetchone()
+        if coupon is None:
+            return None
+        legs = self.conn.execute(
+            """
+            SELECT cl.*, e.home, e.away, e.start_ts
+            FROM coupon_legs cl
+            LEFT JOIN events e ON e.id=cl.event_id
+            WHERE cl.coupon_id=?
+            ORDER BY e.start_ts, cl.id
+            """,
+            (coupon_id,),
+        ).fetchall()
+        result = dict(coupon)
+        result["legs"] = [dict(row) for row in legs]
+        return result
+
+    def dashboard_surprise_reports(self, *, limit: int = 100) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT sr.*, COUNT(sc.id) AS candidate_count,
+                   SUM(CASE WHEN sc.in_system=1 THEN 1 ELSE 0 END) AS system_count
+            FROM surprise_reports sr
+            LEFT JOIN surprise_candidates sc ON sc.report_id=sr.id
+            GROUP BY sr.id
+            ORDER BY sr.created_ts DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def dashboard_surprise_report(self, report_id: int) -> dict | None:
+        report = self.conn.execute(
+            "SELECT * FROM surprise_reports WHERE id=?", (report_id,)
+        ).fetchone()
+        if report is None:
+            return None
+        result = dict(report)
+        result["candidates"] = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT sc.*, e.home, e.away, e.start_ts
+                FROM surprise_candidates sc
+                JOIN events e ON e.id=sc.event_id
+                WHERE sc.report_id=?
+                ORDER BY sc.in_system DESC, sc.fair_prob DESC
+                """,
+                (report_id,),
+            ).fetchall()
+        ]
+        result["system_count"] = sum(
+            candidate["in_system"] for candidate in result["candidates"]
+        )
+        result["scenarios"] = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT * FROM surprise_scenarios
+                WHERE report_id=? ORDER BY system_size
+                """,
+                (report_id,),
+            ).fetchall()
+        ]
+        return result
 
     # -- settings -----------------------------------------------------------
     def set_setting(self, key: str, value: str) -> None:
