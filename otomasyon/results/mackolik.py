@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import time
 from typing import Any
 
 import requests
@@ -77,13 +78,24 @@ class MackolikClient:
         )
 
     def fetch_date(self, day: date) -> list[SourceMatch]:
-        response = self.session.get(
-            MACKOLIK_URL,
-            params=[("sports[]", "Soccer"), ("matchDate", day.isoformat())],
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        last_error: Exception | None = None
+        payload = None
+        for attempt in range(config.HTTP_RETRIES):
+            try:
+                response = self.session.get(
+                    MACKOLIK_URL,
+                    params=[("sports[]", "Soccer"), ("matchDate", day.isoformat())],
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except (requests.RequestException, ValueError) as exc:
+                last_error = exc
+                if attempt < config.HTTP_RETRIES - 1:
+                    time.sleep(config.HTTP_BACKOFF ** (attempt + 1))
+        if payload is None:
+            raise MackolikError(f"Mackolik fetch failed for {day}: {last_error}")
         if payload.get("status") != "success":
             raise MackolikError(
                 f"Mackolik returned {payload.get('status')!r} for {day}"

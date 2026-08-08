@@ -118,3 +118,19 @@ def test_auto_results_fetches_exact_ids_settles_and_notifies(tmp_path):
     # Persistent rate limit prevents another network request.
     report2 = service.auto_results(path, telegram, result_client=source)
     assert report2["skipped"] and report2["reason"] == "rate_limited"
+
+
+def test_failed_result_fetch_does_not_start_rate_limit(tmp_path):
+    path = str(tmp_path / "t.db")
+    _seed(path)
+
+    class Failing:
+        def fetch_date(self, day):
+            raise RuntimeError("temporary failure")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="temporary"):
+        service.auto_results(path, force=True, result_client=Failing())
+    with Database(path) as db:
+        assert db.get_setting("last_result_poll_ts") is None

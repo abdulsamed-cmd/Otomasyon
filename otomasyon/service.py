@@ -168,7 +168,6 @@ def auto_results(
         if not force and now_ts - last < config.RESULT_POLL_INTERVAL_SECONDS:
             return {"skipped": True, "reason": "rate_limited", "matched": 0, "settled": 0}
         pending = db.get_pending_coupons()
-        db.set_setting("last_result_poll_ts", str(now_ts))
 
     targets_by_id: dict[int, dict] = {}
     for coupon in pending:
@@ -180,6 +179,8 @@ def auto_results(
                 "start_ts": leg["start_ts"],
             }
     if not targets_by_id:
+        with Database(db_path) as db:
+            db.set_setting("last_result_poll_ts", str(now_ts))
         return {"skipped": False, "matched": 0, "settled": 0, "dates": []}
 
     days = sorted(
@@ -197,6 +198,9 @@ def auto_results(
         list(targets_by_id.values()), source_matches
     )
     with Database(db_path) as db:
+        # Mark the poll only after every required date fetched successfully.
+        # A transient failure can therefore retry on the next bot tick.
+        db.set_setting("last_result_poll_ts", str(now_ts))
         for result in matched.values():
             db.save_result(result)
 
