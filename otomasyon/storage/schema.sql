@@ -57,6 +57,44 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_odds_selection ON odds_snapshots(selection_id, captured_ts);
 
+-- Complete point-in-time bulletin captures. Unlike the entity tables above,
+-- these membership tables preserve exactly which events, markets and priced
+-- selections were visible in one fetch, enabling true forward replay.
+CREATE TABLE IF NOT EXISTS bulletin_captures (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    captured_ts   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bulletin_capture_ts
+    ON bulletin_captures(captured_ts);
+
+CREATE TABLE IF NOT EXISTS bulletin_capture_events (
+    capture_id    INTEGER NOT NULL,
+    event_id      INTEGER NOT NULL,
+    status        INTEGER NOT NULL,
+    PRIMARY KEY (capture_id, event_id),
+    FOREIGN KEY (capture_id) REFERENCES bulletin_captures(id) ON DELETE CASCADE,
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS bulletin_capture_markets (
+    capture_id    INTEGER NOT NULL,
+    market_id     INTEGER NOT NULL,
+    status        INTEGER NOT NULL,
+    PRIMARY KEY (capture_id, market_id),
+    FOREIGN KEY (capture_id) REFERENCES bulletin_captures(id) ON DELETE CASCADE,
+    FOREIGN KEY (market_id) REFERENCES markets(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS bulletin_capture_selections (
+    capture_id    INTEGER NOT NULL,
+    selection_id  INTEGER NOT NULL,
+    odd           REAL NOT NULL,
+    web_odd       REAL,
+    PRIMARY KEY (capture_id, selection_id),
+    FOREIGN KEY (capture_id) REFERENCES bulletin_captures(id) ON DELETE CASCADE,
+    FOREIGN KEY (selection_id) REFERENCES selections(id) ON DELETE CASCADE
+);
+
 -- Historical results and basic pre-match odds from Mackolik's archive feed.
 -- Used for chronological model training/backtesting; source_id prevents
 -- duplicate backfill rows.

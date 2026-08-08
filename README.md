@@ -100,6 +100,13 @@ oranlarını içerdiğinden Çifte Şans ve KG Var/Yok geçmiş replay'e dahil d
 Ayrıca oranlar 10:00 anlık görüntüsü değil, arşivdeki son maç önü oranlarıdır.
 Komut bu nedenle sonucu açıkça `closing_odds_partial` olarak etiketler.
 
+Yeni bülten çekimleri ayrıca tam bir point-in-time capture olarak saklanır.
+Capture; o çekimde görülen etkinlik, pazar durumu, seçim ve oran üyeliğini
+korur. `Database.load_bulletin_as_of(ts)` geçmişteki en son tam capture'ı
+`NormalizedEvent` listesi olarak yeniden kurar. Böylece saat 10:00 capture'ları
+biriktikçe Çifte Şans, KG Var/Yok ve tüm Alt/Üst çizgileriyle gerçek üretim
+replay'i ileriye dönük olarak mümkün olur.
+
 Geliştirme dönemi baz replay'inde ana kupon ROI'si `-%23,4`, alternatif ROI'si
 `-%40,7` çıktı. Mart validasyonunda geçmiş dönem kalibrasyonu ve beklenen-değer
 eşikleri de pozitif sonuç üretmedi. Bu aday canlıya alınmadı ve daha sonraki test

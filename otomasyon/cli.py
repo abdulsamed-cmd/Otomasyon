@@ -350,7 +350,12 @@ def _print_samples(events, n: int) -> None:
             mk = e.market(code)
             if not mk:
                 continue
-            fps = probability.fair_probs(mk.odds)
+            odds = mk.odds
+            if len(odds) != len(mk.selections) or not all(
+                odd is not None and odd > 1.0 for odd in odds
+            ):
+                continue
+            fps = probability.fair_probs(odds)
             parts = [
                 f"{s.name}={s.odd} (%{fp * 100:.0f})"
                 for s, fp in zip(mk.selections, fps)

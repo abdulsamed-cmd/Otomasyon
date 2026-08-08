@@ -1,3 +1,5 @@
+import copy
+
 from otomasyon.iddaa.markets import MarketResolver
 from otomasyon.iddaa.normalize import build_competitions_map, normalize_events
 from otomasyon.storage import Database
@@ -41,4 +43,35 @@ def test_save_events_is_idempotent_for_entities_but_appends_odds():
     assert db.count("selections") == 5
     # ...but odds snapshots accumulate for movement/CLV analysis.
     assert db.count("odds_snapshots") == 10
+    db.close()
+
+
+def test_load_bulletin_as_of_rebuilds_exact_capture_odds_and_status():
+    comps, events = _events()
+    db = Database(":memory:")
+    db.upsert_competitions(comps)
+    db.save_events(events, now=100)
+
+    changed = copy.deepcopy(events)
+    changed[0].markets[0].status = 0
+    changed[0].markets[0].selections[0].odd = 9.99
+    db.save_events(changed, now=200)
+
+    old = db.load_bulletin_as_of(150)
+    new = db.load_bulletin_as_of(200)
+    assert old[0].markets[0].status == 1
+    assert old[0].markets[0].selections[0].odd != 9.99
+    assert new[0].markets[0].status == 0
+    assert new[0].markets[0].selections[0].odd == 9.99
+    db.close()
+
+
+def test_empty_capture_removes_prior_events_from_point_in_time_bulletin():
+    comps, events = _events()
+    db = Database(":memory:")
+    db.upsert_competitions(comps)
+    db.save_events(events, now=100)
+    db.save_events([], now=200)
+    assert len(db.load_bulletin_as_of(150)) == 1
+    assert db.load_bulletin_as_of(200) == []
     db.close()

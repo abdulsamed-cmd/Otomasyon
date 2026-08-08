@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Iterable
 
 from .. import config
-from ..iddaa.normalize import NormalizedEvent
+from ..iddaa.normalize import (
+    NormalizedEvent,
+    NormalizedMarket,
+    NormalizedSelection,
+)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -63,8 +67,13 @@ class Database:
         Returns counts useful for logging/verification.
         """
         now = now or int(time.time())
+        events = list(events)
         cur = self.conn.cursor()
         stats = {"events": 0, "markets": 0, "selections": 0, "odds": 0}
+        cur.execute(
+            "INSERT INTO bulletin_captures (captured_ts) VALUES (?)", (now,)
+        )
+        capture_id = cur.lastrowid
 
         for ev in events:
             cur.execute(
@@ -86,6 +95,13 @@ class Database:
                     ev.competition_id if ev.competition_id != -1 else None,
                     ev.sport_id, ev.start_ts, ev.status, now, now,
                 ),
+            )
+            cur.execute(
+                """
+                INSERT INTO bulletin_capture_events (capture_id, event_id, status)
+                VALUES (?, ?, ?)
+                """,
+                (capture_id, ev.event_id, ev.status),
             )
             stats["events"] += 1
 
@@ -109,6 +125,14 @@ class Database:
                     (ev.event_id, mk.t, mk.st, sov_key),
                 ).fetchone()
                 market_id = market_row["id"]
+                cur.execute(
+                    """
+                    INSERT INTO bulletin_capture_markets
+                        (capture_id, market_id, status)
+                    VALUES (?, ?, ?)
+                    """,
+                    (capture_id, market_id, mk.status),
+                )
                 stats["markets"] += 1
 
                 for sel in mk.selections:
@@ -138,10 +162,98 @@ class Database:
                         """,
                         (selection_id, sel.odd, sel.web_odd, now),
                     )
+                    cur.execute(
+                        """
+                        INSERT INTO bulletin_capture_selections
+                            (capture_id, selection_id, odd, web_odd)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (capture_id, selection_id, sel.odd, sel.web_odd),
+                    )
                     stats["odds"] += 1
 
         self.conn.commit()
         return stats
+
+    def load_bulletin_as_of(self, as_of_ts: int) -> list[NormalizedEvent]:
+        """Rebuild the most recent complete bulletin captured by ``as_of_ts``."""
+        capture = self.conn.execute(
+            """
+            SELECT id, captured_ts FROM bulletin_captures
+            WHERE captured_ts <= ?
+            ORDER BY captured_ts DESC, id DESC
+            LIMIT 1
+            """,
+            (as_of_ts,),
+        ).fetchone()
+        if capture is None:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT
+                e.id AS event_id, e.home, e.away, e.competition_id,
+                e.sport_id, e.start_ts, ce.status AS event_status,
+                c.name AS competition_name, c.country_code,
+                m.id AS market_id, m.t, m.st, m.sov, m.name AS market_name,
+                cm.status AS market_status,
+                s.outcome_no, s.name AS outcome_name,
+                cs.odd, cs.web_odd
+            FROM bulletin_capture_events ce
+            JOIN events e ON e.id = ce.event_id
+            LEFT JOIN competitions c ON c.id = e.competition_id
+            JOIN bulletin_capture_markets cm
+                ON cm.capture_id = ce.capture_id
+            JOIN markets m
+                ON m.id = cm.market_id AND m.event_id = e.id
+            JOIN bulletin_capture_selections cs
+                ON cs.capture_id = ce.capture_id
+            JOIN selections s
+                ON s.id = cs.selection_id AND s.market_id = m.id
+            WHERE ce.capture_id = ?
+            ORDER BY e.id, m.id, s.outcome_no
+            """,
+            (capture["id"],),
+        ).fetchall()
+        events: dict[int, NormalizedEvent] = {}
+        markets: dict[int, NormalizedMarket] = {}
+        for row in rows:
+            event = events.get(row["event_id"])
+            if event is None:
+                event = NormalizedEvent(
+                    event_id=row["event_id"],
+                    home=row["home"],
+                    away=row["away"],
+                    competition_id=row["competition_id"],
+                    competition_name=row["competition_name"] or "",
+                    country_code=row["country_code"],
+                    sport_id=row["sport_id"],
+                    start_ts=row["start_ts"],
+                    status=row["event_status"],
+                    markets=[],
+                )
+                events[row["event_id"]] = event
+            market = markets.get(row["market_id"])
+            if market is None:
+                market = NormalizedMarket(
+                    market_id=row["market_id"],
+                    t=row["t"],
+                    st=row["st"],
+                    name=row["market_name"],
+                    sov=row["sov"] or None,
+                    status=row["market_status"],
+                    selections=[],
+                )
+                markets[row["market_id"]] = market
+                event.markets.append(market)
+            market.selections.append(
+                NormalizedSelection(
+                    outcome_no=row["outcome_no"],
+                    name=row["outcome_name"],
+                    odd=row["odd"],
+                    web_odd=row["web_odd"],
+                )
+            )
+        return list(events.values())
 
     def save_coupon(self, coupon, for_date: str, *, now: int | None = None) -> int:
         """Persist a generated coupon and its legs; returns the coupon id.
