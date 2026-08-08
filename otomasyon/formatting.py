@@ -71,11 +71,16 @@ def format_settlement(coupon: dict, settlement) -> str:
     lines = [f"KUPON SONUCU — {kind} ({coupon.get('for_date','')})", f"Durum: {status}"]
     if settlement.status == "won":
         lines.append(
-            f"Efektif oran: {settlement.effective_odds:.2f}  |  "
-            f"Kâr (1 birim): +{settlement.profit:.2f}"
+            f"Kupon oranı: {settlement.effective_odds:.2f}  |  "
+            f"Toplam geri dönüş (1 birim): {settlement.effective_odds:.2f}"
         )
+        lines.append(f"Net kâr: +{settlement.profit:.2f} birim")
     elif settlement.status == "lost":
-        lines.append("Kâr (1 birim): -1.00")
+        lines.append("Toplam geri dönüş (1 birim): 0.00")
+        lines.append("Net kâr: -1.00 birim")
+    elif settlement.status == "void":
+        lines.append("Toplam geri dönüş (1 birim): 1.00")
+        lines.append("Net kâr: 0.00 birim")
     lines.append("")
     legs = coupon.get("legs", [])
     for leg, leg_res in zip(legs, settlement.legs):
