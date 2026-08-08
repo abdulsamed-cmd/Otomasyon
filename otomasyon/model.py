@@ -17,7 +17,7 @@ import math
 import statistics
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config, probability
 from .eligibility import is_daily_eligible
@@ -31,6 +31,8 @@ class GoalPrediction:
     confidence: float
     samples_home: int
     samples_away: int
+    elo_home: float
+    elo_away: float
     probs: dict[str, float]
 
 
@@ -60,8 +62,9 @@ class GoalModel:
         global_weight = global_home = global_away = 0.0
         stats: dict[tuple[str, str], dict] = {}
         competitions: dict[str, dict] = {}
+        elo: dict[str, float] = {}
 
-        for row in self.history:
+        for row in sorted(self.history, key=lambda item: item["start_ts"]):
             age_days = max(0.0, (self.cutoff_ts - row["start_ts"]) / 86400)
             weight = math.exp(-ln2 * age_days / config.MODEL_HALF_LIFE_DAYS)
             global_weight += weight
@@ -87,6 +90,33 @@ class GoalModel:
                 item["conceded"] += weight * conceded
                 item["n"] += 1
 
+            home_key, away_key = row["home_key"], row["away_key"]
+            home_rating = elo.get(home_key, 1500.0)
+            away_rating = elo.get(away_key, 1500.0)
+            expected = 1.0 / (
+                1.0
+                + 10
+                ** (
+                    -(
+                        home_rating
+                        + config.MODEL_ELO_HOME_ADVANTAGE
+                        - away_rating
+                    )
+                    / 400.0
+                )
+            )
+            if row["ft_home"] > row["ft_away"]:
+                actual = 1.0
+            elif row["ft_home"] == row["ft_away"]:
+                actual = 0.5
+            else:
+                actual = 0.0
+            margin = abs(row["ft_home"] - row["ft_away"])
+            k = config.MODEL_ELO_K * (1.0 + 0.35 * math.log1p(margin))
+            change = k * (actual - expected)
+            elo[home_key] = home_rating + change
+            elo[away_key] = away_rating - change
+
         if global_weight:
             self.avg_home = global_home / global_weight
             self.avg_away = global_away / global_weight
@@ -98,6 +128,7 @@ class GoalModel:
         )
         self.stats = stats
         self.competitions = competitions
+        self.elo = elo
 
     def _competition_rates(self, competition: str | None) -> tuple[float, float]:
         item = self.competitions.get(competition or "")
@@ -141,13 +172,41 @@ class GoalModel:
         confidence = sample / (sample + config.MODEL_PRIOR_MATCHES)
         if sample < config.MODEL_MIN_TEAM_MATCHES:
             confidence *= sample / config.MODEL_MIN_TEAM_MATCHES
+        probs = self._market_probs(home_lam, away_lam)
+        home_elo = self.elo.get(normalize_team(home), 1500.0)
+        away_elo = self.elo.get(normalize_team(away), 1500.0)
+        elo_score = 1.0 / (
+            1.0
+            + 10
+            ** (
+                -(
+                    home_elo
+                    + config.MODEL_ELO_HOME_ADVANTAGE
+                    - away_elo
+                )
+                / 400.0
+            )
+        )
+        poisson_score = probs["1"] + 0.5 * probs["0"]
+        blend = config.MODEL_ELO_BLEND * confidence
+        target_score = (1.0 - blend) * poisson_score + blend * elo_score
+        draw = probs["0"]
+        home_prob = min(1.0 - draw, max(0.0, target_score - 0.5 * draw))
+        probs["1"] = home_prob
+        probs["2"] = 1.0 - draw - home_prob
+        probs["1 ve 0"] = probs["1"] + draw
+        probs["1 ve 2"] = probs["1"] + probs["2"]
+        probs["0 ve 2"] = draw + probs["2"]
+
         return GoalPrediction(
             home_lambda=home_lam,
             away_lambda=away_lam,
             confidence=confidence,
             samples_home=home_n,
             samples_away=away_n,
-            probs=self._market_probs(home_lam, away_lam),
+            elo_home=home_elo,
+            elo_away=away_elo,
+            probs=probs,
         )
 
     @staticmethod
@@ -197,25 +256,38 @@ def _actual_1x2(row: dict) -> str:
     return "2"
 
 
-def backtest(history: list[dict], *, test_days: int = 14) -> dict:
+def backtest(
+    history: list[dict],
+    *,
+    test_days: int = 14,
+    test_end_date: str | None = None,
+) -> dict:
     """Chronological holdout backtest using only information before cutoff."""
     if not history:
         return {"error": "no_history"}
     # A historical feed can retain isolated postponed fixtures under their new
     # future date. Pick the latest well-populated date rather than max(start_ts)
     # so one rescheduled match cannot move the holdout window into the future.
-    date_counts = Counter(row["match_date"] for row in history)
-    populated_dates = {day for day, count in date_counts.items() if count >= 20}
-    candidates = [
-        row["start_ts"] for row in history if row["match_date"] in populated_dates
-    ]
-    end_ts = max(candidates or [row["start_ts"] for row in history]) + 1
+    if test_end_date:
+        end_local = (
+            datetime.strptime(test_end_date, "%Y-%m-%d")
+            .replace(tzinfo=config.TIMEZONE)
+            + timedelta(days=1)
+        )
+        end_ts = int(end_local.timestamp())
+    else:
+        date_counts = Counter(row["match_date"] for row in history)
+        populated_dates = {day for day, count in date_counts.items() if count >= 20}
+        candidates = [
+            row["start_ts"] for row in history if row["match_date"] in populated_dates
+        ]
+        end_ts = max(candidates or [row["start_ts"] for row in history]) + 1
     cutoff = end_ts - test_days * 86400
     train = [row for row in history if row["start_ts"] < cutoff]
     test = [
         row
         for row in history
-        if row["start_ts"] >= cutoff
+        if cutoff <= row["start_ts"] < end_ts
         and is_daily_eligible(row.get("competition") or "")
     ]
     model = GoalModel(train, cutoff)
@@ -237,7 +309,9 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
         if all(odds_1x2):
             fair = probability.fair_probs(odds_1x2)
             for outcome, odd, market_p in zip(("1", "0", "2"), odds_1x2, fair):
-                candidates.append((outcome, odd, pred.probs[outcome] - market_p))
+                candidates.append(
+                    (outcome, odd, pred.probs[outcome] - market_p, "1X2")
+                )
             favourite_index = min(range(3), key=lambda i: odds_1x2[i])
             favourite_odd = odds_1x2[favourite_index]
             favourite_outcome = ("1", "0", "2")[favourite_index]
@@ -251,8 +325,18 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
             fair = probability.fair_probs(odds_ou)
             candidates.extend(
                 [
-                    ("Alt 2.5", odds_ou[0], pred.probs["Alt 2.5"] - fair[0]),
-                    ("Üst 2.5", odds_ou[1], pred.probs["Üst 2.5"] - fair[1]),
+                    (
+                        "Alt 2.5",
+                        odds_ou[0],
+                        pred.probs["Alt 2.5"] - fair[0],
+                        "OU25",
+                    ),
+                    (
+                        "Üst 2.5",
+                        odds_ou[1],
+                        pred.probs["Üst 2.5"] - fair[1],
+                        "OU25",
+                    ),
                 ]
             )
         candidates = [
@@ -264,7 +348,7 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
         ]
         if not candidates:
             continue
-        outcome, odd, edge = max(candidates, key=lambda c: c[2])
+        outcome, odd, edge, market = max(candidates, key=lambda c: c[2])
         if outcome in ("1", "0", "2"):
             won = outcome == actual
             predicted = pred.probs[outcome]
@@ -281,6 +365,7 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
                 "profit": odd - 1.0 if won else -1.0,
                 "predicted": predicted,
                 "edge": edge,
+                "market": market,
             }
         )
 
@@ -290,6 +375,23 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
         margin = 1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
     else:
         margin = 0.0
+    market_breakdown = {}
+    for market in ("1X2", "OU25"):
+        selected = [bet for bet in bets if bet["market"] == market]
+        market_breakdown[market] = {
+            "bets": len(selected),
+            "wins": sum(bet["won"] for bet in selected),
+            "roi": (
+                statistics.mean(bet["profit"] for bet in selected)
+                if selected
+                else 0.0
+            ),
+        }
+
+    gate_passed = (
+        len(bets) >= config.MODEL_GATE_MIN_BETS
+        and roi - margin > config.MODEL_GATE_MIN_ROI_CI_LOW
+    )
     return {
         "train_matches": len(train),
         "test_matches": len(test),
@@ -307,5 +409,7 @@ def backtest(history: list[dict], *, test_days: int = 14) -> dict:
             if market_favourite_bets
             else 0.0
         ),
+        "market_breakdown": market_breakdown,
+        "gate_passed": gate_passed,
         "model_live_enabled": config.MODEL_LIVE_ENABLED,
     }

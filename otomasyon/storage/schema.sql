@@ -85,6 +85,17 @@ CREATE INDEX IF NOT EXISTS idx_history_start ON historical_matches(start_ts);
 CREATE INDEX IF NOT EXISTS idx_history_home ON historical_matches(home_key, start_ts);
 CREATE INDEX IF NOT EXISTS idx_history_away ON historical_matches(away_key, start_ts);
 
+CREATE TABLE IF NOT EXISTS clubelo_ratings (
+    rating_date  TEXT NOT NULL,
+    club_key     TEXT NOT NULL,
+    club         TEXT NOT NULL,
+    country      TEXT,
+    level        INTEGER,
+    elo          REAL NOT NULL,
+    PRIMARY KEY (rating_date, club_key)
+);
+CREATE INDEX IF NOT EXISTS idx_clubelo_date ON clubelo_ratings(rating_date);
+
 -- Generated coupons (daily main/alt, surprise). No auto-play; informational.
 CREATE TABLE IF NOT EXISTS coupons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,

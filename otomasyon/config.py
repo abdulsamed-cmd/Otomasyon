@@ -105,9 +105,14 @@ MODEL_HALF_LIFE_DAYS = 60.0
 MODEL_PRIOR_MATCHES = 8.0
 MODEL_MIN_TEAM_MATCHES = 6
 MODEL_MIN_EDGE = 0.04
+MODEL_ELO_K = 20.0
+MODEL_ELO_HOME_ADVANTAGE = 60.0
+MODEL_ELO_BLEND = 0.45
 # Safety gate: model remains report/backtest-only until explicitly enabled
 # after sufficient out-of-sample evidence.
 MODEL_LIVE_ENABLED = False
+MODEL_GATE_MIN_BETS = 200
+MODEL_GATE_MIN_ROI_CI_LOW = 0.0
 
 
 def telegram_bot_token() -> str | None:

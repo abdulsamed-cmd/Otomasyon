@@ -18,8 +18,9 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
 - [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
   15 dakikalık oto-settlement ve Telegram sonuç bildirimi
-- [x] Bağlamsal gol modeli temeli + kronolojik ROI/kalibrasyon backtest kapısı
-- [ ] Model iyileştirme (Elo/xG, kadro-sakatlık, hava) ve pozitif holdout kanıtı
+- [x] Bağlamsal gol modeli + opponent-adjusted Elo + pazar bazlı kronolojik backtest
+- [x] İstatistiksel ROI kabul kapısı + bağımsız ClubElo rapor/validasyon katmanı
+- [ ] Model iyileştirme (xG, kadro-sakatlık, hava) ve pozitif holdout kanıtı
 
 ### Komutlar
 
@@ -33,8 +34,11 @@ python3 -m otomasyon.cli result --event ID --ft 2-1 [--ht 1-0]
 python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + bildir
 python3 -m otomasyon.cli auto-results [--force] [--notify] # Mackolik otomatik
 python3 -m otomasyon.cli metrics              # isabet / ROI / ort. oran
-python3 -m otomasyon.cli history-backfill --days 180
-python3 -m otomasyon.cli backtest --test-days 30
+python3 -m otomasyon.cli history-backfill --days 365
+python3 -m otomasyon.cli backtest --test-days 30 --test-end 2026-04-30
+python3 -m otomasyon.cli clubelo                       # canlı, rapor modu
+python3 -m otomasyon.cli clubelo-backfill --start 2026-03-01 --end 2026-03-31
+python3 -m otomasyon.cli clubelo-backtest --start 2026-03-01 --end 2026-03-31
 ```
 
 ## Veri kaynağı
@@ -80,8 +84,10 @@ takım hücum/savunma gücü ve Poisson pazar olasılıklarını hesaplar. Eğit
 test kronolojik olarak ayrılır; test dönemindeki hiçbir sonuç eğitime girmez.
 
 Model varsayılan olarak yalnızca rapor/backtest modundadır
-(`MODEL_LIVE_ENABLED = False`). Pozitif ve istatistiksel olarak güvenilir
-holdout ROI/kalibrasyon kanıtı oluşmadan Telegram kuponlarını etkileyemez.
+(`MODEL_LIVE_ENABLED = False`). En az 200 seçimde ROI'nin %95 güven aralığı
+sıfırın üstüne çıkmadan kabul kapısı geçilemez. ClubElo da ayrı bir dış görüş
+olarak aynı kurala tabidir. Bu kanıt oluşmadan iki model de Telegram kuponlarını
+etkileyemez; mesajlar açıkça "piyasa tabanlı deneme kuponu" olarak etiketlenir.
 
 ## Kurulum ve çalıştırma
 

@@ -162,6 +162,8 @@ def cmd_history_backfill(args: argparse.Namespace) -> int:
         f"Tarihsel veri: {report['days']} gün, "
         f"{report['rows_processed']} satır işlendi, DB toplam {report['total']}"
     )
+    if report["skipped_days"]:
+        print(f"Önceden mevcut gün (atlandı): {report['skipped_days']}")
     if report["errors"]:
         print(f"Hatalı gün sayısı: {len(report['errors'])}")
         for error in report["errors"][:5]:
@@ -174,7 +176,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
     with Database(args.db) as db:
         history = db.load_historical_matches()
-    report = backtest(history, test_days=args.test_days)
+    report = backtest(
+        history, test_days=args.test_days, test_end_date=args.test_end
+    )
     if report.get("error"):
         print("Backtest yapılamadı:", report["error"])
         return 1
@@ -194,7 +198,85 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         f"  Piyasa favorisi : {report['market_favourite_bets']} seçim, "
         f"ROI %{report['market_favourite_roi'] * 100:.1f}"
     )
+    for market, values in report["market_breakdown"].items():
+        print(
+            f"  {market:15}: {values['bets']} seçim, "
+            f"{values['wins']} kazanan, ROI %{values['roi'] * 100:.1f}"
+        )
+    print(
+        "  Kabul kapısı     : "
+        + ("GEÇTİ" if report["gate_passed"] else "KALDI (canlıya alınamaz)")
+    )
     print("  Canlı model     : KAPALI (kanıt kapısı)")
+    return 0
+
+
+def cmd_clubelo(args: argparse.Namespace) -> int:
+    from .clubelo import ClubEloClient, compare_to_iddaa
+
+    events, _ = service.get_live_events()
+    fixtures = ClubEloClient().fetch_fixtures()
+    report = compare_to_iddaa(events, fixtures)
+    print("=== ClubElo bağımsız görüş (RAPOR MODU) ===")
+    print(
+        f"ClubElo fikstürü {report['clubelo_fixtures']}, "
+        f"iddaa eşleşmesi {report['matched']}/{report['events']}"
+    )
+    for item in report["reports"][: args.limit]:
+        print(
+            f"  {item['home']} - {item['away']} | {item['outcome']} "
+            f"@ {item['odd']} | iddaa %{item['iddaa_fair']*100:.1f}, "
+            f"ClubElo %{item['clubelo_prob']*100:.1f}, "
+            f"fark {item['difference']*100:+.1f} puan"
+        )
+    print("Canlı seçim etkisi: KAPALI (tarihsel doğrulama yok)")
+    return 0
+
+
+def cmd_clubelo_backfill(args: argparse.Namespace) -> int:
+    report = service.backfill_clubelo(
+        args.db,
+        start_date=datetime.strptime(args.start, "%Y-%m-%d").date(),
+        end_date=datetime.strptime(args.end, "%Y-%m-%d").date(),
+    )
+    print(
+        f"ClubElo: {report['fetched']} gün çekildi, "
+        f"{report['skipped']} gün atlandı, {report['rows']} rating kaydedildi"
+    )
+    for error in report["errors"]:
+        print(f"  {error['date']}: {error['error']}")
+    return 0 if not report["errors"] else 1
+
+
+def cmd_clubelo_backtest(args: argparse.Namespace) -> int:
+    from .clubelo import backtest_ratings
+
+    with Database(args.db) as db:
+        history = db.load_historical_matches()
+        ratings = db.load_clubelo_ratings(args.start, args.end)
+    report = backtest_ratings(
+        history,
+        ratings,
+        start_date=args.start,
+        end_date=args.end,
+        min_edge=args.min_edge,
+    )
+    print("=== ClubElo sabit dönem backtest (RAPOR MODU) ===")
+    print(
+        f"Test {report['test_matches']}, kapsanan {report['covered']}, "
+        f"seçim {report['bets']}, kazanan {report['wins']}"
+    )
+    print(
+        f"ROI %{report['roi']*100:.1f} "
+        f"(%95: %{report['roi_ci95'][0]*100:.1f} .. "
+        f"%{report['roi_ci95'][1]*100:.1f}), "
+        f"ort. oran {report['avg_odds']:.2f}, "
+        f"ort. edge %{report['avg_edge']*100:.1f}"
+    )
+    print(
+        "Kabul kapısı: "
+        + ("GEÇTİ" if report["gate_passed"] else "KALDI (canlıya alınamaz)")
+    )
     return 0
 
 
@@ -293,7 +375,31 @@ def build_parser() -> argparse.ArgumentParser:
         "backtest", help="Run chronological contextual-model backtest"
     )
     p_backtest.add_argument("--test-days", type=int, default=14)
+    p_backtest.add_argument(
+        "--test-end", help="Inclusive holdout end date (YYYY-MM-DD)"
+    )
     p_backtest.set_defaults(func=cmd_backtest)
+
+    p_clubelo = sub.add_parser(
+        "clubelo", help="Compare current iddaa 1X2 with independent ClubElo"
+    )
+    p_clubelo.add_argument("--limit", type=int, default=10)
+    p_clubelo.set_defaults(func=cmd_clubelo)
+
+    p_ce_backfill = sub.add_parser(
+        "clubelo-backfill", help="Cache daily historical ClubElo ratings"
+    )
+    p_ce_backfill.add_argument("--start", required=True)
+    p_ce_backfill.add_argument("--end", required=True)
+    p_ce_backfill.set_defaults(func=cmd_clubelo_backfill)
+
+    p_ce_test = sub.add_parser(
+        "clubelo-backtest", help="Backtest cached ClubElo ratings"
+    )
+    p_ce_test.add_argument("--start", required=True)
+    p_ce_test.add_argument("--end", required=True)
+    p_ce_test.add_argument("--min-edge", type=float, default=config.MODEL_MIN_EDGE)
+    p_ce_test.set_defaults(func=cmd_clubelo_backtest)
     return parser
 
 

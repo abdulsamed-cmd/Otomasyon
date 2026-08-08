@@ -44,8 +44,9 @@ def format_daily(coupons: dict, for_date: str) -> str:
     parts.append(format_coupon("ALTERNATİF", coupons.get("alt")))
     parts.append("")
     parts.append(
-        "Not: Bilgilendirme amaçlıdır, otomatik oynama yapılmaz. "
-        "Oranlar kupon anındaki değerlerdir."
+        "Not: Piyasa tabanlı deneme kuponudur; bağlamsal ROI modeli henüz "
+        "kabul testini geçmemiştir. Bilgilendirme amaçlıdır, otomatik oynama "
+        "yapılmaz. Oranlar kupon anındaki değerlerdir."
     )
     return "\n".join(parts)
 

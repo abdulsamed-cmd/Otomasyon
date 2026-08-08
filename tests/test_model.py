@@ -33,6 +33,7 @@ def test_goal_model_learns_team_strength_and_valid_probabilities():
 
     assert pred.home_lambda > pred.away_lambda
     assert pred.probs["1"] > pred.probs["2"]
+    assert pred.elo_home > pred.elo_away
     assert abs(sum(pred.probs[x] for x in ("1", "0", "2")) - 1.0) < 1e-9
     assert abs(pred.probs["Var"] + pred.probs["Yok"] - 1.0) < 1e-9
     assert pred.samples_home == 20 and pred.samples_away == 20
@@ -49,6 +50,7 @@ def test_chronological_backtest_uses_holdout_and_reports_roi():
     assert report["roi"] > 0
     assert report["brier_1x2"] is not None
     assert report["model_live_enabled"] is False
+    assert report["gate_passed"] is False  # fewer than required 200 bets
 
 
 def test_friendlies_are_not_used_for_training_or_test():

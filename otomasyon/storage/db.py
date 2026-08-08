@@ -253,6 +253,62 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def historical_dates(self) -> set[str]:
+        return {
+            row["match_date"]
+            for row in self.conn.execute(
+                "SELECT DISTINCT match_date FROM historical_matches"
+            ).fetchall()
+        }
+
+    def save_clubelo_ratings(self, ratings) -> int:
+        from ..results.matcher import normalize_team
+
+        rows = [
+            (
+                rating.date,
+                normalize_team(rating.club),
+                rating.club,
+                rating.country,
+                rating.level,
+                rating.elo,
+            )
+            for rating in ratings
+            if normalize_team(rating.club)
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO clubelo_ratings
+                (rating_date, club_key, club, country, level, elo)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(rating_date, club_key) DO UPDATE SET
+                club=excluded.club, country=excluded.country,
+                level=excluded.level, elo=excluded.elo
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def load_clubelo_ratings(self, start_date: str, end_date: str) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM clubelo_ratings
+            WHERE rating_date BETWEEN ? AND ?
+            ORDER BY rating_date, club_key
+            """,
+            (start_date, end_date),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def clubelo_dates(self) -> set[str]:
+        return {
+            row["rating_date"]
+            for row in self.conn.execute(
+                "SELECT DISTINCT rating_date FROM clubelo_ratings"
+            ).fetchall()
+        }
+
     # -- results & settlement ----------------------------------------------
     def save_result(self, result, *, now: int | None = None) -> None:
         now = now or int(time.time())

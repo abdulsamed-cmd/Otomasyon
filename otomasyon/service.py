@@ -231,9 +231,15 @@ def backfill_history(
     result_client = result_client or MackolikClient()
     saved = 0
     fetched_days = 0
+    skipped_days = 0
     errors = []
+    with Database(db_path) as db:
+        existing_dates = db.historical_dates()
     for offset in range(days, 0, -1):
         day = end_date - timedelta(days=offset)
+        if day.isoformat() in existing_dates:
+            skipped_days += 1
+            continue
         try:
             matches = result_client.fetch_archive_date(day)
             # Archive pages may carry a postponed fixture whose displayed date
@@ -259,7 +265,46 @@ def backfill_history(
         total = db.count("historical_matches")
     return {
         "days": fetched_days,
+        "skipped_days": skipped_days,
         "rows_processed": saved,
         "total": total,
+        "errors": errors,
+    }
+
+
+def backfill_clubelo(
+    db_path: str,
+    *,
+    start_date: date,
+    end_date: date,
+    client=None,
+    pause_seconds: float = 0.1,
+) -> dict:
+    from .clubelo import ClubEloClient
+
+    client = client or ClubEloClient()
+    with Database(db_path) as db:
+        existing = db.clubelo_dates()
+    day = start_date
+    fetched = skipped = rows = 0
+    errors = []
+    while day <= end_date:
+        if day.isoformat() in existing:
+            skipped += 1
+        else:
+            try:
+                ratings = client.fetch_ratings(day)
+                with Database(db_path) as db:
+                    rows += db.save_clubelo_ratings(ratings)
+                fetched += 1
+            except Exception as exc:
+                errors.append({"date": day.isoformat(), "error": str(exc)})
+            if pause_seconds:
+                time.sleep(pause_seconds)
+        day += timedelta(days=1)
+    return {
+        "fetched": fetched,
+        "skipped": skipped,
+        "rows": rows,
         "errors": errors,
     }
