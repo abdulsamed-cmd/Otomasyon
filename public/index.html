@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Otomasyon · Automation Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">⚡</span>
+        <div>
+          <h1>Otomasyon</h1>
+          <p class="tagline">Automation rules dashboard</p>
+        </div>
+      </div>
+      <div class="status" id="health">Checking…</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <h2>New rule</h2>
+        <form id="rule-form" class="rule-form">
+          <label>
+            Name
+            <input name="name" type="text" placeholder="e.g. Nightly backup" required />
+          </label>
+          <label>
+            Trigger
+            <select name="trigger">
+              <option value="manual">manual</option>
+              <option value="schedule">schedule</option>
+              <option value="webhook">webhook</option>
+            </select>
+          </label>
+          <label>
+            Action
+            <input name="action" type="text" placeholder="e.g. Run backup script" required />
+          </label>
+          <button type="submit">Add rule</button>
+          <p class="form-error" id="form-error"></p>
+        </form>
+      </section>
+
+      <section class="panel wide">
+        <h2>Rules</h2>
+        <div id="rules" class="rules"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>Run log</h2>
+        <ul id="runs" class="runs"></ul>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
