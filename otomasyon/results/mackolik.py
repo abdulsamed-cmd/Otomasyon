@@ -9,7 +9,7 @@ team-name similarity is only a fallback for records without that field.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import time
 from typing import Any
 
@@ -21,6 +21,7 @@ MACKOLIK_URL = (
     "https://www.mackolik.com/perform/p0/ajax/components/"
     "competition/livescores/json"
 )
+MACKOLIK_ARCHIVE_URL = "https://vd.mackolik.com/livedata"
 
 
 class MackolikError(RuntimeError):
@@ -78,6 +79,35 @@ class MackolikClient:
         )
 
     def fetch_date(self, day: date) -> list[SourceMatch]:
+        """Fetch one day, with archive fallback.
+
+        The modern feed is preferred for named fields. For extra-time/penalty
+        games we also consult the archive because its indices 29/30 carry the
+        90-minute score required by standard football-market settlement.
+        """
+        try:
+            matches = self._fetch_modern(day)
+        except MackolikError:
+            return self._fetch_archive(day)
+
+        if any(
+            match.substate in ("afterExtraTime", "penalties") for match in matches
+        ):
+            archive = self._fetch_archive(day)
+            regulation = {
+                match.iddaa_code: match
+                for match in archive
+                if match.iddaa_code is not None
+            }
+            matches = [
+                regulation.get(match.iddaa_code, match)
+                if match.substate in ("afterExtraTime", "penalties")
+                else match
+                for match in matches
+            ]
+        return matches
+
+    def _fetch_modern(self, day: date) -> list[SourceMatch]:
         last_error: Exception | None = None
         payload = None
         for attempt in range(config.HTTP_RETRIES):
@@ -104,6 +134,31 @@ class MackolikClient:
         values = raw_matches.values() if isinstance(raw_matches, dict) else raw_matches
         return [self._parse(raw) for raw in values]
 
+    def _fetch_archive(self, day: date) -> list[SourceMatch]:
+        last_error: Exception | None = None
+        payload = None
+        for attempt in range(config.HTTP_RETRIES):
+            try:
+                response = self.session.get(
+                    MACKOLIK_ARCHIVE_URL,
+                    params={"date": day.strftime("%d/%m/%Y")},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except (requests.RequestException, ValueError) as exc:
+                last_error = exc
+                if attempt < config.HTTP_RETRIES - 1:
+                    time.sleep(config.HTTP_BACKOFF ** (attempt + 1))
+        if payload is None:
+            raise MackolikError(
+                f"Mackolik archive fetch failed for {day}: {last_error}"
+            )
+        rows = payload.get("m") or []
+        # row[23] == 1 is football.
+        return [self._parse_archive(row) for row in rows if len(row) > 36 and row[23] == 1]
+
     @staticmethod
     def _parse(raw: dict) -> SourceMatch:
         score = raw.get("score") or {}
@@ -125,4 +180,51 @@ class MackolikClient:
             ft_away=_score_int(score.get("away")),
             ht_home=_score_int(ht.get("home")),
             ht_away=_score_int(ht.get("away")),
+        )
+
+    @staticmethod
+    def _parse_archive(row: list) -> SourceMatch:
+        status = str(row[6] or "")
+        status_key = status.casefold()
+        if status in ("MS", "UZ", "Pen"):
+            state, substate = "post", {
+                "MS": "fullTime",
+                "UZ": "afterExtraTime",
+                "Pen": "penalties",
+            }[status]
+        elif status_key.startswith("ert"):
+            state, substate = "pre", "postponed"
+        elif status_key.startswith(("ipt", "cancel")):
+            state, substate = "pre", "cancelled"
+        else:
+            state, substate = "pre", ""
+
+        iddaa_code = _score_int(row[14])
+        if iddaa_code == 0:
+            iddaa_code = None
+        # The legacy feed explicitly separates 90-minute score (29/30) from
+        # displayed final after extra time (12/13). Betting settlement uses 90'.
+        ft_home = _score_int(row[29])
+        ft_away = _score_int(row[30])
+        if ft_home is None or ft_away is None:
+            ft_home, ft_away = _score_int(row[12]), _score_int(row[13])
+        try:
+            local_dt = datetime.strptime(
+                f"{row[35]} {row[16]}", "%d/%m/%Y %H:%M"
+            ).replace(tzinfo=config.TIMEZONE)
+            start_ts = int(local_dt.timestamp())
+        except (TypeError, ValueError):
+            start_ts = 0
+        return SourceMatch(
+            source_id=f"legacy:{row[0]}",
+            iddaa_code=iddaa_code,
+            home=str(row[2] or ""),
+            away=str(row[4] or ""),
+            start_ts=start_ts,
+            state=state,
+            substate=substate,
+            ft_home=ft_home,
+            ft_away=ft_away,
+            ht_home=_score_int(row[31]),
+            ht_away=_score_int(row[32]),
         )

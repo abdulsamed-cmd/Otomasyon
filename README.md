@@ -57,10 +57,17 @@ Bahis kapsamındaki kayıtlardaki `iddaaCode`, iddaa bültenindeki event id ile
 doğrudan aynıdır; sonuçlar öncelikle bu kesin anahtarla eşleştirilir. Kod
 bulunmayan istisnalarda yalnızca yüksek güvenli tarih+saat+takım benzerliği
 yedeği kullanılır; belirsiz kayıtlar yanlış settlement yerine atlanır.
+Modern feed geçici olarak erişilemezse arşiv feed'i yedek olur. Uzatma/penaltı
+maçlarında normal süre bahisleri arşiv feed'indeki 90 dakika skoru ile
+sonuçlandırılır; uzatma sonu görünen skor yanlışlıkla kullanılmaz.
 
 Telegram botu çalışırken sonuç taraması 15 dakikada bir yapılır. Sonuçlanan
 kupon kapatılır ve kullanıcıya otomatik bildirim gönderilir. Erteleme/iptal
 seçimleri `void` kabul edilir ve efektif oranları `1.00` sayılır.
+
+Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
+kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri
+lisansı/izin değerlendirmesi yapılmalıdır.
 
 ## Kurulum ve çalıştırma
 
