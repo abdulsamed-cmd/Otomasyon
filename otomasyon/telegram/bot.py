@@ -46,6 +46,7 @@ class Bot:
         db=None,
         push_hour: int | None = None,
         push_callback: Callable[[], object] | None = None,
+        result_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -54,6 +55,7 @@ class Bot:
         self.db = db
         self.push_hour = push_hour
         self.push_callback = push_callback
+        self.result_callback = result_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -127,6 +129,13 @@ class Bot:
             try:
                 self.poll_once(poll_timeout)
                 self._maybe_scheduled_push()
+                if self.result_callback is not None:
+                    report = self.result_callback()
+                    if report and report.get("settled"):
+                        print(
+                            f"Sonuç taraması: {report['matched']} maç eşleşti, "
+                            f"{report['settled']} kupon kapandı ve bildirildi"
+                        )
             except KeyboardInterrupt:  # pragma: no cover
                 print("Bot durduruluyor.")
                 return

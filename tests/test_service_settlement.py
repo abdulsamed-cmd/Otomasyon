@@ -3,6 +3,7 @@ from otomasyon.engine import Coupon, Leg
 from otomasyon.iddaa.normalize import NormalizedEvent
 from otomasyon.settlement import MatchResult
 from otomasyon.storage import Database
+from otomasyon.results.mackolik import SourceMatch
 
 
 def _event(eid, home, away):
@@ -67,3 +68,53 @@ def test_settle_pending_marks_lost(tmp_path):
     assert decided[0]["settlement"].status == "lost"
     m = service.metrics(path)
     assert m["won"] == 0 and m["roi"] == -1.0
+
+
+class FakeResultClient:
+    def __init__(self):
+        self.days = []
+
+    def fetch_date(self, day):
+        self.days.append(day)
+        return [
+            SourceMatch(
+                "mk1", 1, "A", "B", 1786197600, "post", "fullTime",
+                1, 1, 0, 0,
+            ),
+            SourceMatch(
+                "mk2", 2, "C", "D", 1786197600, "post", "fullTime",
+                2, 0, 1, 0,
+            ),
+        ]
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.sent = []
+
+    def send_message(self, chat_id, text):
+        self.sent.append((str(chat_id), text))
+
+
+def test_auto_results_fetches_exact_ids_settles_and_notifies(tmp_path):
+    path = str(tmp_path / "t.db")
+    _seed(path)
+    with Database(path) as db:
+        db.set_setting("telegram_chat_id", "42")
+
+    source = FakeResultClient()
+    telegram = FakeTelegram()
+    report = service.auto_results(
+        path, telegram, force=True, result_client=source
+    )
+
+    assert report["matched"] == 2
+    assert report["settled"] == 1
+    assert all(d["method"] == "iddaa_code" for d in report["diagnostics"])
+    assert len(telegram.sent) == 1
+    assert telegram.sent[0][0] == "42"
+    assert "KAZANDI" in telegram.sent[0][1]
+
+    # Persistent rate limit prevents another network request.
+    report2 = service.auto_results(path, telegram, result_client=source)
+    assert report2["skipped"] and report2["reason"] == "rate_limited"

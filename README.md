@@ -16,7 +16,8 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 - [x] Sürpriz modülü (İY/MS, 6+ gol, sistem senaryoları)
 - [x] Telegram botu (`bugün` / `sürpriz`, tek kullanıcı) + proaktif günlük gönderim
 - [x] Settlement + sonuç bildirimi + metrikler (isabet, ROI, ort. oran)
-- [ ] Otomatik sonuç kaynağı (Mackolik) + oto-settlement zamanlayıcı
+- [x] Otomatik sonuç kaynağı (Mackolik) + exact `iddaaCode` eşleştirme +
+  15 dakikalık oto-settlement ve Telegram sonuç bildirimi
 - [ ] Kendi bağlamsal olasılık modelimiz (form/ev/hava/sakatlık → ROI/CLV)
 
 ### Komutlar
@@ -29,6 +30,7 @@ python3 -m otomasyon.cli bot                  # Telegram botu (+ proaktif gönde
 python3 -m otomasyon.cli push [--force]       # günün kuponunu proaktif gönder
 python3 -m otomasyon.cli result --event ID --ft 2-1 [--ht 1-0]
 python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + bildir
+python3 -m otomasyon.cli auto-results [--force] [--notify] # Mackolik otomatik
 python3 -m otomasyon.cli metrics              # isabet / ROI / ort. oran
 ```
 
@@ -45,7 +47,20 @@ JSON API'si** kullanılır:
 | Ligler | `GET /sportsbook/competitions?st=1` |
 
 Pazar isimleri her zaman `get_market_config`'ten çözülür (kod: `f"{t}_{st}"`).
-Maç sonuçları ve geçmiş veri (settlement + model) Mackolik arşivinden alınacaktır.
+Maç sonuçları Mackolik canlı-sonuç JSON feed'inden alınır; aynı kaynak ileride
+bağlamsal modelin geçmiş-veri katmanında da kullanılacaktır.
+
+### Otomatik sonuç akışı
+
+Mackolik canlı-sonuç sayfasının kullandığı JSON feed tarih bazında çekilir.
+Bahis kapsamındaki kayıtlardaki `iddaaCode`, iddaa bültenindeki event id ile
+doğrudan aynıdır; sonuçlar öncelikle bu kesin anahtarla eşleştirilir. Kod
+bulunmayan istisnalarda yalnızca yüksek güvenli tarih+saat+takım benzerliği
+yedeği kullanılır; belirsiz kayıtlar yanlış settlement yerine atlanır.
+
+Telegram botu çalışırken sonuç taraması 15 dakikada bir yapılır. Sonuçlanan
+kupon kapatılır ve kullanıcıya otomatik bildirim gönderilir. Erteleme/iptal
+seçimleri `void` kabul edilir ve efektif oranları `1.00` sayılır.
 
 ## Kurulum ve çalıştırma
 

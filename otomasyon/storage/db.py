@@ -217,6 +217,7 @@ class Database:
             ht_home=row["ht_home"],
             ht_away=row["ht_away"],
             status=row["status"],
+            source=row["source"],
         )
 
     def get_pending_coupons(self) -> list[dict]:
@@ -228,7 +229,8 @@ class Database:
         for c in coupons:
             legs = self.conn.execute(
                 """
-                SELECT cl.*, e.home AS home, e.away AS away
+                SELECT cl.*, e.home AS home, e.away AS away,
+                       e.start_ts AS start_ts
                 FROM coupon_legs cl
                 LEFT JOIN events e ON e.id = cl.event_id
                 WHERE cl.coupon_id = ?
@@ -247,6 +249,7 @@ class Database:
                             "event_id": leg["event_id"],
                             "home": leg["home"],
                             "away": leg["away"],
+                            "start_ts": leg["start_ts"],
                             "market_t": leg["market_t"],
                             "market_st": leg["market_st"],
                             "market_sov": leg["market_sov"],

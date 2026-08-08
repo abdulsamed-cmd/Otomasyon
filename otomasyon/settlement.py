@@ -28,6 +28,7 @@ class MatchResult:
     ht_home: int | None = None
     ht_away: int | None = None
     status: str = "final"  # final | postponed | cancelled
+    source: str | None = None
 
     @property
     def is_final(self) -> bool:

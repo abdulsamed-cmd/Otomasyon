@@ -92,6 +92,13 @@ SURPRISE_UNIT_STAKE = 20.0
 # even if they never type "bugün". Chosen to be well before typical kickoffs.
 DAILY_PUSH_HOUR = 10
 
+# Poll Mackolik for completed matches while the bot is running. The persisted
+# last-poll timestamp prevents duplicate work across bot restarts.
+RESULT_POLL_INTERVAL_SECONDS = 15 * 60
+# Only used when a Mackolik record lacks ``iddaaCode``. Exact event-id matching
+# is always preferred.
+RESULT_FUZZY_THRESHOLD = 0.84
+
 
 def telegram_bot_token() -> str | None:
     """Telegram bot token, read from the environment (never committed)."""

@@ -72,6 +72,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
         db=db,
         push_hour=config.DAILY_PUSH_HOUR,
         push_callback=lambda: service.push_daily(args.db, client),
+        result_callback=lambda: service.auto_results(args.db, client),
     )
     bot.run()
     return 0
@@ -125,6 +126,33 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     print(f"  Ortalama oran    : {m['avg_odds']:.2f}")
     print(f"  Kâr/Zarar        : {m['profit']:+.2f} birim")
     print(f"  ROI              : %{m['roi'] * 100:.1f}")
+    return 0
+
+
+def cmd_auto_results(args: argparse.Namespace) -> int:
+    client = None
+    if args.notify:
+        from .telegram import TelegramClient
+
+        client = TelegramClient()
+    report = service.auto_results(
+        args.db, client, force=args.force
+    )
+    if report.get("skipped"):
+        print(f"Sonuç taraması atlandı: {report.get('reason')}")
+        return 0
+    print(
+        f"Sonuç taraması: {report['matched']} maç eşleşti, "
+        f"{report['settled']} kupon kapandı"
+    )
+    if report.get("dates"):
+        print("Taranan tarihler:", ", ".join(report["dates"]))
+    for item in report.get("diagnostics", []):
+        if item["method"] != "unmatched":
+            print(
+                f"  event {item['event_id']}: {item['method']} "
+                f"(güven {item['score']:.3f})"
+            )
     return 0
 
 
@@ -205,6 +233,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_metrics = sub.add_parser("metrics", help="Show performance metrics")
     p_metrics.set_defaults(func=cmd_metrics)
+
+    p_auto = sub.add_parser(
+        "auto-results", help="Fetch Mackolik results, settle and optionally notify"
+    )
+    p_auto.add_argument("--force", action="store_true", help="Ignore poll interval")
+    p_auto.add_argument("--notify", action="store_true", help="Notify Telegram")
+    p_auto.set_defaults(func=cmd_auto_results)
     return parser
 
 

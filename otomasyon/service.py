@@ -144,3 +144,69 @@ def metrics(db_path: str) -> dict:
         "profit": profit,
         "roi": (profit / staked) if staked else 0.0,
     }
+
+
+def auto_results(
+    db_path: str,
+    telegram_client=None,
+    *,
+    force: bool = False,
+    result_client=None,
+) -> dict:
+    """Fetch Mackolik results for pending coupons, match, settle and notify.
+
+    Calls are rate-limited persistently so invoking this on every bot poll is
+    safe. Exact Mackolik ``iddaaCode`` matching is preferred; strict fuzzy
+    matching is only a fallback for records without that field.
+    """
+    from .results import MackolikClient, match_source_results
+
+    now_ts = int(time.time())
+    with Database(db_path) as db:
+        last_raw = db.get_setting("last_result_poll_ts")
+        last = int(last_raw) if last_raw else 0
+        if not force and now_ts - last < config.RESULT_POLL_INTERVAL_SECONDS:
+            return {"skipped": True, "reason": "rate_limited", "matched": 0, "settled": 0}
+        pending = db.get_pending_coupons()
+        db.set_setting("last_result_poll_ts", str(now_ts))
+
+    targets_by_id: dict[int, dict] = {}
+    for coupon in pending:
+        for leg in coupon["legs"]:
+            targets_by_id[leg["event_id"]] = {
+                "event_id": leg["event_id"],
+                "home": leg["home"],
+                "away": leg["away"],
+                "start_ts": leg["start_ts"],
+            }
+    if not targets_by_id:
+        return {"skipped": False, "matched": 0, "settled": 0, "dates": []}
+
+    days = sorted(
+        {
+            datetime.fromtimestamp(event["start_ts"], tz=config.TIMEZONE).date()
+            for event in targets_by_id.values()
+        }
+    )
+    result_client = result_client or MackolikClient()
+    source_matches = []
+    for day in days:
+        source_matches.extend(result_client.fetch_date(day))
+
+    matched, diagnostics = match_source_results(
+        list(targets_by_id.values()), source_matches
+    )
+    with Database(db_path) as db:
+        for result in matched.values():
+            db.save_result(result)
+
+    decided = settle_pending(
+        db_path, telegram_client, notify=telegram_client is not None
+    )
+    return {
+        "skipped": False,
+        "matched": len(matched),
+        "settled": len(decided),
+        "dates": [day.isoformat() for day in days],
+        "diagnostics": diagnostics,
+    }
