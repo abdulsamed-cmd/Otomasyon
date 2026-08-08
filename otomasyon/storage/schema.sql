@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS coupon_legs (
     FOREIGN KEY (event_id) REFERENCES events(id)
 );
 
+-- Simple key/value app settings (e.g. the Telegram chat id to notify).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
+
 -- Final match results used to settle coupons (source: Mackolik archive, etc.).
 CREATE TABLE IF NOT EXISTS results (
     event_id     INTEGER PRIMARY KEY,

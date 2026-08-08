@@ -176,6 +176,23 @@ class Database:
         self.conn.commit()
         return coupon_id
 
+    # -- settings -----------------------------------------------------------
+    def set_setting(self, key: str, value: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        self.conn.commit()
+
+    def get_setting(self, key: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
     # -- reads --------------------------------------------------------------
     def count(self, table: str) -> int:
         # table name is internal/controlled, not user input

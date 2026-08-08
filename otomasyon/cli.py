@@ -1,8 +1,10 @@
 """Command line entry points for Otomasyon.
 
 Usage:
-    python -m otomasyon.cli fetch            # fetch today's football bulletin
-    python -m otomasyon.cli fetch --sample 3 # ...and print 3 sample events
+    python -m otomasyon.cli fetch [--sample N]  # fetch & store today's bulletin
+    python -m otomasyon.cli coupon [--no-save]  # today's low-risk coupons
+    python -m otomasyon.cli surprise            # surprise-lab report
+    python -m otomasyon.cli bot                 # run the Telegram bot
 """
 
 from __future__ import annotations
@@ -10,25 +12,13 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
-from . import config, engine, probability
-from .iddaa import IddaaClient, MarketResolver, normalize_events
-from .iddaa.normalize import build_competitions_map
+from . import config, engine, formatting, probability, service, surprise
 from .storage import Database
-
-
-def fetch_normalized_events(client: IddaaClient | None = None):
-    """Fetch competitions + bulletin and return (events, competitions)."""
-    client = client or IddaaClient()
-    resolver = MarketResolver.from_client(client)
-    competitions = build_competitions_map(client.get_competitions())
-    raw_events = client.get_events()
-    events = normalize_events(raw_events, resolver, competitions)
-    return events, competitions
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
     print("Pazar konfigürasyonu + ligler + bülten çekiliyor...")
-    events, competitions = fetch_normalized_events()
+    events, competitions = service.fetch_normalized_events()
     print(f"  -> {len(events)} maç, {len(competitions)} lig")
 
     with Database(args.db) as db:
@@ -39,53 +29,46 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         f"{stats['events']} maç, {stats['markets']} pazar, "
         f"{stats['selections']} seçim, {stats['odds']} oran anlık kaydı"
     )
-
     if args.sample:
         _print_samples(events, args.sample)
     return 0
 
 
-def _print_coupon(title: str, coupon) -> None:
-    if coupon is None:
-        print(f"\n{title}: uygun kupon bulunamadı.")
-        return
-    print(
-        f"\n{title}  (toplam oran {coupon.total_odds:.2f}, "
-        f"birleşik olasılık %{coupon.combined_prob * 100:.1f}, "
-        f"{len(coupon.legs)} maç)"
-    )
-    for leg in coupon.legs:
-        when = datetime.fromtimestamp(leg.start_ts, tz=config.TIMEZONE).strftime(
-            "%H:%M"
-        )
-        print(
-            f"  [{when}] {leg.home} - {leg.away}  ({leg.competition})\n"
-            f"         {leg.market_name}: {leg.outcome_name} @ {leg.odd}  "
-            f"(adil %{leg.fair_prob * 100:.0f})"
-        )
-
-
 def cmd_coupon(args: argparse.Namespace) -> int:
     print("Bülten çekiliyor...")
-    events, competitions = fetch_normalized_events()
-    print(f"  -> {len(events)} maç")
-
-    now = datetime.now(tz=config.TIMEZONE)
-    coupons = engine.build_daily_coupons(events, now=now)
-    for_date = now.strftime("%Y-%m-%d")
-
-    print(f"\n=== Günün düşük riskli kuponları ({for_date}) ===")
-    _print_coupon("ANA KUPON", coupons["main"])
-    _print_coupon("ALTERNATİF", coupons["alt"])
-
-    if not args.no_save and (coupons["main"] or coupons["alt"]):
-        with Database(args.db) as db:
-            db.upsert_competitions(competitions)
-            db.save_events(events)
-            for c in (coupons["main"], coupons["alt"]):
-                if c:
-                    db.save_coupon(c, for_date)
+    text = service.daily_text(args.db, save=not args.no_save)
+    print("\n" + text)
+    if not args.no_save:
         print("\n(Kuponlar takip için veritabanına kaydedildi.)")
+    return 0
+
+
+def cmd_surprise(args: argparse.Namespace) -> int:
+    print("Bülten çekiliyor...")
+    print("\n" + service.surprise_text())
+    return 0
+
+
+def cmd_bot(args: argparse.Namespace) -> int:
+    from .telegram import Bot, TelegramClient
+
+    username = config.telegram_allowed_username()
+    if not username:
+        print("HATA: TELEGRAM_ALLOWED_USERNAME tanımlı değil.")
+        return 1
+    client = TelegramClient()
+    me = client.get_me()
+    print(f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}")
+
+    db = Database(args.db)
+    bot = Bot(
+        client,
+        username,
+        on_daily=lambda: service.daily_text(args.db),
+        on_surprise=service.surprise_text,
+        db=db,
+    )
+    bot.run()
     return 0
 
 
@@ -100,22 +83,16 @@ def _print_samples(events, n: int) -> None:
             "%d.%m %H:%M"
         )
         print(f"\n[{when}] {e.home} - {e.away}  ({e.competition_name})")
-        ms = e.market(config.MARKET_MATCH_RESULT)
-        if ms:
-            fps = probability.fair_probs(ms.odds)
+        for code in (config.MARKET_MATCH_RESULT, config.MARKET_OVER_UNDER):
+            mk = e.market(code)
+            if not mk:
+                continue
+            fps = probability.fair_probs(mk.odds)
             parts = [
                 f"{s.name}={s.odd} (%{fp * 100:.0f})"
-                for s, fp in zip(ms.selections, fps)
+                for s, fp in zip(mk.selections, fps)
             ]
-            print("  Maç Sonucu: " + "  ".join(parts))
-        ou = e.market(config.MARKET_OVER_UNDER)
-        if ou:
-            fps = probability.fair_probs(ou.odds)
-            parts = [
-                f"{s.name}={s.odd} (%{fp * 100:.0f})"
-                for s, fp in zip(ou.selections, fps)
-            ]
-            print(f"  {ou.name}: " + "  ".join(parts))
+            print(f"  {mk.name}: " + "  ".join(parts))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,18 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_fetch = sub.add_parser("fetch", help="Fetch and store today's football bulletin")
-    p_fetch.add_argument(
-        "--sample", type=int, default=0, help="Print N sample events after fetching"
-    )
+    p_fetch.add_argument("--sample", type=int, default=0, help="Print N sample events")
     p_fetch.set_defaults(func=cmd_fetch)
 
-    p_coupon = sub.add_parser(
-        "coupon", help="Build today's low-risk main + alternative coupons"
-    )
-    p_coupon.add_argument(
-        "--no-save", action="store_true", help="Do not persist coupons to the DB"
-    )
+    p_coupon = sub.add_parser("coupon", help="Build today's low-risk coupons")
+    p_coupon.add_argument("--no-save", action="store_true", help="Do not persist")
     p_coupon.set_defaults(func=cmd_coupon)
+
+    p_surprise = sub.add_parser("surprise", help="Build the surprise-lab report")
+    p_surprise.set_defaults(func=cmd_surprise)
+
+    p_bot = sub.add_parser("bot", help="Run the single-user Telegram bot")
+    p_bot.set_defaults(func=cmd_bot)
     return parser
 
 
