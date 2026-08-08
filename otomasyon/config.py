@@ -87,6 +87,11 @@ SURPRISE_SYSTEM_SIZE = 6
 # Theoretical unit stake per column (TL) used to show minimum system cost.
 SURPRISE_UNIT_STAKE = 20.0
 
+# --- Proactive delivery ----------------------------------------------------
+# Local hour (Europe/Istanbul) at which the daily coupon is pushed to the user
+# even if they never type "bugün". Chosen to be well before typical kickoffs.
+DAILY_PUSH_HOUR = 10
+
 
 def telegram_bot_token() -> str | None:
     """Telegram bot token, read from the environment (never committed)."""

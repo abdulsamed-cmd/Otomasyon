@@ -49,6 +49,12 @@ def test_unknown_command_returns_help():
     assert bot.handle_update(_update(1, "AbdulsamedErden", "selam")) == HELP
 
 
+def test_surprise_typo_tolerance():
+    bot = _bot(FakeClient())
+    for typo in ("süpriz", "supriz", "Suprise"):
+        assert bot.handle_update(_update(1, "AbdulsamedErden", typo)) == "SURPRISE"
+
+
 def test_other_users_are_ignored():
     bot = _bot(FakeClient())
     assert bot.handle_update(_update(1, "someone_else", "bugün")) is None

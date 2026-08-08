@@ -58,7 +58,10 @@ def cmd_bot(args: argparse.Namespace) -> int:
         return 1
     client = TelegramClient()
     me = client.get_me()
-    print(f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}")
+    print(
+        f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}  "
+        f"| günlük proaktif gönderim saati: {config.DAILY_PUSH_HOUR}:00"
+    )
 
     db = Database(args.db)
     bot = Bot(
@@ -67,8 +70,22 @@ def cmd_bot(args: argparse.Namespace) -> int:
         on_daily=lambda: service.daily_text(args.db),
         on_surprise=service.surprise_text,
         db=db,
+        push_hour=config.DAILY_PUSH_HOUR,
+        push_callback=lambda: service.push_daily(args.db, client),
     )
     bot.run()
+    return 0
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    from .telegram import TelegramClient
+
+    client = TelegramClient()
+    chat_id = service.push_daily(args.db, client, force=args.force)
+    if chat_id:
+        print(f"Günün kuponu proaktif olarak gönderildi -> chat {chat_id}")
+    else:
+        print("Gönderim atlandı (chat_id yok ya da bugün zaten gönderildi).")
     return 0
 
 
@@ -113,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_bot = sub.add_parser("bot", help="Run the single-user Telegram bot")
     p_bot.set_defaults(func=cmd_bot)
+
+    p_push = sub.add_parser("push", help="Proactively push today's coupon now")
+    p_push.add_argument(
+        "--force", action="store_true", help="Send even if already pushed today"
+    )
+    p_push.set_defaults(func=cmd_push)
     return parser
 
 

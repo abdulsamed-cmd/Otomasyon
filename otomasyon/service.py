@@ -58,3 +58,24 @@ def surprise_text() -> str:
     events, _ = get_live_events()
     report = surprise.build_surprise(events, now=datetime.now(tz=config.TIMEZONE))
     return formatting.format_surprise(report)
+
+
+def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
+    """Proactively send today's daily coupon to the stored chat.
+
+    De-duplicated per day via the ``last_push_date`` setting, so it is safe to
+    call repeatedly. Returns the chat id sent to, or None if skipped.
+    """
+    today = datetime.now(tz=config.TIMEZONE).strftime("%Y-%m-%d")
+    with Database(db_path) as db:
+        chat_id = db.get_setting("telegram_chat_id")
+        if not chat_id:
+            return None
+        if not force and db.get_setting("last_push_date") == today:
+            return None
+
+    text = daily_text(db_path)
+    client.send_message(chat_id, text)
+    with Database(db_path) as db:
+        db.set_setting("last_push_date", today)
+    return chat_id

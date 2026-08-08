@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
+
+from .. import config
 
 HELP = (
     "Merhaba! Komutlar:\n"
@@ -41,12 +44,16 @@ class Bot:
         on_daily: Callable[[], str],
         on_surprise: Callable[[], str],
         db=None,
+        push_hour: int | None = None,
+        push_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
         self.on_daily = on_daily
         self.on_surprise = on_surprise
         self.db = db
+        self.push_hour = push_hour
+        self.push_callback = push_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -75,9 +82,28 @@ class Bot:
             return HELP
         if "bugün" in text or "bugun" in text:
             return self.on_daily()
-        if "sürpriz" in text or "surpriz" in text:
+        # Tolerant of common misspellings (süpriz / supriz / suprise).
+        if any(w in text for w in ("sürpriz", "surpriz", "süpriz", "supriz", "suprise")):
             return self.on_surprise()
         return HELP
+
+    def _maybe_scheduled_push(self) -> None:
+        """Proactively push the daily coupon at the configured local hour.
+
+        The push callback is responsible for de-duplicating per day, so calling
+        this every poll cycle is safe.
+        """
+        if self.push_hour is None or self.push_callback is None:
+            return
+        if datetime.now(tz=config.TIMEZONE).hour < self.push_hour:
+            return
+        try:
+            result = self.push_callback()
+            if result:
+                stamp = time.strftime("%H:%M:%S")
+                print(f"[{stamp}] proaktif günlük kupon gönderildi -> chat {result}")
+        except Exception as exc:  # pragma: no cover - resilience
+            print(f"Zamanlanmış gönderim hatası: {exc}")
 
     def poll_once(self, timeout: int = 25) -> int:
         updates = self.client.get_updates(offset=self._offset, timeout=timeout)
@@ -100,6 +126,7 @@ class Bot:
         while True:
             try:
                 self.poll_once(poll_timeout)
+                self._maybe_scheduled_push()
             except KeyboardInterrupt:  # pragma: no cover
                 print("Bot durduruluyor.")
                 return
