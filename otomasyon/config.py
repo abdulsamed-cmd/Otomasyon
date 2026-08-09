@@ -103,6 +103,9 @@ TELEGRAM_POLL_RESET_AFTER_FAILURES = 3
 TELEGRAM_POLL_CONNECT_RETRIES = 0
 # Connecting must fail fast; only the long poll itself is allowed to be slow.
 TELEGRAM_CONNECT_TIMEOUT_SECONDS = 10
+# The bot polls every ~15s and the scheduler wakes every ~25s. A shared silence
+# longer than this means the host stopped executing, not that a request failed.
+HOST_STALL_SECONDS = 90
 # Poll traces are diagnostic; keep a bounded window.
 TELEGRAM_POLL_LOG_RETENTION_SECONDS = 3 * 24 * 60 * 60
 

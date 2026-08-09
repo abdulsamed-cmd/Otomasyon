@@ -1319,6 +1319,97 @@ def archive_and_notify(
     return report
 
 
+def host_downtime(db_path: str, *, since_ts: int | None = None) -> dict:
+    """Windows in which the machine itself stopped running the automation.
+
+    The bot polls every ~15s and the scheduler wakes every ~25s as independent
+    processes. When both stop for the identical stretch, nothing inside the
+    application can be responsible: the host was suspended. Detecting this
+    matters because during such a window a Telegram message stays unanswered no
+    matter how robust the code is.
+    """
+    since_ts = since_ts or int(time.time()) - 24 * 60 * 60
+    with Database(db_path) as db:
+        polls = [
+            row["ended_ts"]
+            for row in db.conn.execute(
+                """
+                SELECT ended_ts FROM telegram_poll_log
+                WHERE outcome='ok' AND ended_ts>=? ORDER BY ended_ts
+                """,
+                (since_ts,),
+            )
+        ]
+        cycles = [
+            row["started_ts"]
+            for row in db.conn.execute(
+                """
+                SELECT DISTINCT started_ts FROM scheduler_callback_runs
+                WHERE started_ts>=? ORDER BY started_ts
+                """,
+                (since_ts,),
+            )
+        ]
+
+    def _gaps(stamps, normal):
+        return [
+            {"from_ts": first, "seconds": second - first}
+            for first, second in zip(stamps, stamps[1:])
+            if second - first > normal
+        ]
+
+    poll_gaps = _gaps(polls, config.HOST_STALL_SECONDS)
+    cycle_gaps = _gaps(cycles, config.HOST_STALL_SECONDS)
+
+    # Only count a window as host downtime when both processes lost the same
+    # stretch; a gap in one alone is an application problem worth keeping
+    # separate.
+    windows = []
+    for gap in poll_gaps:
+        match = next(
+            (
+                other
+                for other in cycle_gaps
+                if abs(other["from_ts"] - gap["from_ts"]) < config.HOST_STALL_SECONDS
+            ),
+            None,
+        )
+        if match is not None:
+            windows.append(
+                {
+                    "from_ts": gap["from_ts"],
+                    "seconds": max(gap["seconds"], match["seconds"]),
+                }
+            )
+
+    total = sum(window["seconds"] for window in windows)
+    return {
+        "windows": windows,
+        "count": len(windows),
+        "total_seconds": total,
+        "longest_seconds": max((w["seconds"] for w in windows), default=0),
+        "scheduler_gaps": len(cycle_gaps),
+        "poll_gaps": len(poll_gaps),
+    }
+
+
+def host_downtime_text(db_path: str, *, since_ts: int | None = None) -> str:
+    """A plain statement of whether the machine was actually up."""
+    report = host_downtime(db_path, since_ts=since_ts)
+    if not report["count"]:
+        return "Sunucu: son 24 saatte kesinti görünmüyor"
+    longest = report["longest_seconds"] / 60
+    total = report["total_seconds"] / 60
+    last = datetime.fromtimestamp(
+        report["windows"][-1]["from_ts"], tz=config.TIMEZONE
+    ).strftime("%d.%m %H:%M")
+    return (
+        f"Sunucu: son 24 saatte {report['count']} kez durdu · "
+        f"toplam {total:.0f} dk · en uzunu {longest:.0f} dk · son {last}\n"
+        "  (Bu sürelerde makine çalışmadığı için mesajlara cevap verilemez.)"
+    )
+
+
 def model_status_text(db_path: str) -> str:
     processes = metrics_by_kind(db_path)
     shadow = shadow_model_metrics(db_path)
@@ -1328,7 +1419,7 @@ def model_status_text(db_path: str) -> str:
     walk_forward = walk_forward_metrics(db_path)
     goals = surprise_category_metrics(db_path)["goals_6plus"]
     training = latest_model_training(db_path)
-    lines = ["09:45 MODEL / PERFORMANS DURUMU"]
+    lines = ["09:45 MODEL / PERFORMANS DURUMU", host_downtime_text(db_path)]
     if training:
         trained = datetime.fromtimestamp(
             training["trained_ts"], tz=config.TIMEZONE
