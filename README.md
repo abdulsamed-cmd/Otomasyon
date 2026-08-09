@@ -130,6 +130,30 @@ Bu yüzden yoklama katmanı şu değişmezlere dayanır:
   devralma dakikalar değil saniyeler alır.
 - Yanıt üretilemezse (kaynak erişilemez) komut sessizce düşürülmez; hata
   bildiren bir yanıt kuyruğa alınır. Sessizlik, ölü bir bottan ayırt edilemez.
+- Taşıma katmanında otomatik yeniden deneme **kapalıdır**. Her iç deneme zaman
+  aşımını sıfırdan başlattığı için tek bir yoklama dakikalarca sürebiliyordu;
+  ölçümde 117 ve 710 saniyelik denemeler görüldü. Bunun yerine bot hatadan
+  sonra bağlantıyı kendisi tazeler, böylece tek deneme bağlanma + okuma
+  süresiyle sınırlı kalır.
+
+### Sunucu duruşları: koddan bağımsız tek gerçek sınır
+
+Bot ~15 saniyede bir yoklama yapar, scheduler ~25 saniyede bir uyanır. Bunlar
+ayrı süreçlerdir ve biri diğerini durduramaz. Bu yüzden **ikisinin aynı anda ve
+aynı süre boyunca susması** uygulama hatası değildir: makinenin kendisi
+çalışmayı durdurmuştur.
+
+Ölçülen örnek (9 Ağustos): 18:54'te 2,1 dakika ve 19:11'de 12,0 dakika boyunca
+her iki süreç de hiç çalışmadı; scheduler'da aynı gün 36, 70, 85 ve 167
+dakikalık duruşlar da görüldü. Bu pencerelerde gelen Telegram mesajı hiçbir
+kodla karşılanamaz, çünkü karşılayacak süreç çalışmıyordur. Makine geri
+döndüğünde boştaki TCP bağlantısı Telegram tarafından kapatılmış olur ve ilk
+yoklama `RemoteDisconnected` ile döner — geç kalmanın sebebi değil, sonucudur.
+
+`otomasyon.service.host_downtime` bu pencereleri iki sürecin kayıtlarını
+karşılaştırarak tespit eder ve `durum` raporunun ilk satırında gösterir.
+Kalıcı çözüm koddan değil dağıtımdan gelir: otomasyonun 7/24 açık bir
+sunucuda (`docker compose up -d`) çalıştırılması gerekir.
 
 Süreç ölümüne karşı koruma süreç dışındadır: Compose'da `restart:
 unless-stopped`, elle çalıştırmada ise botu bir yeniden başlatma döngüsüne

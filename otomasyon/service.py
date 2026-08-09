@@ -153,6 +153,9 @@ def check_bot_liveness(
     """
     now = int(now if now is not None else time.time())
     with Database(db_path) as db:
+        db.prune_telegram_poll_log(
+            config.TELEGRAM_POLL_LOG_RETENTION_SECONDS, now
+        )
         runtime = db.telegram_bot_runtime()
         chat_id = db.get_setting("telegram_chat_id")
         if runtime is None or not chat_id:
