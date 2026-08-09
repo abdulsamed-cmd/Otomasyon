@@ -1,4 +1,5 @@
 from datetime import datetime
+import sqlite3
 
 import pytest
 
@@ -149,3 +150,70 @@ def test_failed_model_status_send_has_no_receipt_or_marker(tmp_path):
     with Database(path) as db:
         assert db.get_telegram_delivery_receipt("model_status:2026-08-09") is None
         assert db.get_setting("last_model_status_date") is None
+
+
+def test_legacy_receipt_schema_is_migrated_and_remains_deduplicated(tmp_path):
+    path = tmp_path / "legacy-receipts.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE telegram_delivery_receipts (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind          TEXT NOT NULL,
+                dedupe_key    TEXT NOT NULL UNIQUE,
+                chat_id       TEXT NOT NULL,
+                message_id    INTEGER NOT NULL,
+                telegram_date INTEGER,
+                sent_ts       INTEGER NOT NULL
+            );
+            INSERT INTO telegram_delivery_receipts
+                (kind, dedupe_key, chat_id, message_id, telegram_date, sent_ts)
+            VALUES
+                ('daily_push', 'daily_push:2026-08-08', '123', 700,
+                 1786172400, 1786172400);
+            """
+        )
+
+    with Database(path) as db:
+        existing = db.get_telegram_delivery_receipt(
+            "daily_push:2026-08-08"
+        )
+        assert existing["notification_date"] == "2026-08-08"
+
+        db.record_telegram_delivery(
+            kind="daily_push",
+            notification_dates=["2026-08-09"],
+            chat_id="123",
+            message_id=701,
+            telegram_date=1786258800,
+            sent_ts=1786258800,
+            markers={},
+        )
+        recorded = db.get_telegram_delivery_receipt(
+            "daily_push:2026-08-09"
+        )
+        assert recorded["notification_date"] == "2026-08-09"
+        with pytest.raises(sqlite3.IntegrityError):
+            db.record_telegram_delivery(
+                kind="daily_push",
+                notification_dates=["2026-08-09"],
+                chat_id="123",
+                message_id=702,
+                telegram_date=1786258801,
+                sent_ts=1786258801,
+                markers={},
+            )
+
+    with Database(path) as db:
+        assert (
+            db.get_telegram_delivery_receipt(
+                "daily_push:2026-08-08"
+            )["notification_date"]
+            == "2026-08-08"
+        )
+        assert (
+            db.get_telegram_delivery_receipt(
+                "daily_push:2026-08-09"
+            )["message_id"]
+            == 701
+        )
