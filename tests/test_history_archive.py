@@ -175,7 +175,11 @@ def test_xg_sync_and_model_refresh_follow_completed_archive(tmp_path):
     assert sync["errors"] == []
     refresh = service.auto_model_refresh(path, now=now)
     assert refresh["skipped"] is False
+    assert len(refresh["runs"]) == 2
     assert refresh["run"]["history_matches"] > 0
+    with Database(path) as db:
+        assert db.count("model_artifacts") == 2
+        assert db.count("model_training_runs") == 2
     assert service.auto_model_refresh(path, now=now)["reason"] == "already_trained"
     status = service.model_status_text(path)
     assert "Son eğitim:" in status

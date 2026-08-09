@@ -515,26 +515,27 @@ def cmd_model_refresh(args: argparse.Namespace) -> int:
     if report["skipped"]:
         print(f"Model eğitimi atlandı: {report['reason']}")
         return 0
-    run = report["run"]
-    print(
-        f"Model eğitildi: {run['model_version']} | "
-        f"{run['history_matches']} maç | {run['xg_matches']} xG maçı"
-    )
+    for run in report["runs"]:
+        print(
+            f"Model eğitildi: {run['model_version']} | "
+            f"{run['history_matches']} maç | {run['xg_matches']} xG maçı | "
+            f"{run['feature_rows']} feature"
+        )
     return 0
 
 
 def cmd_shadow_predict(args: argparse.Namespace) -> int:
     report = service.capture_shadow_predictions(args.db)
     print(
-        f"Gölge model {report['model_version']}: "
-        f"{report['eligible']} uygun tahmin, {report['saved']} yeni kayıt"
+        f"Gölge tahmin: {report['eligible']} uygun, "
+        f"{report['saved']} yeni kayıt | {report['by_model']}"
     )
     print("Canlı kupon etkisi: KAPALI")
     return 0
 
 
 def cmd_shadow_metrics(args: argparse.Namespace) -> int:
-    report = service.shadow_model_metrics(args.db)
+    report = service.shadow_model_metrics(args.db, args.model_version)
     print(f"=== Gölge model: {report['model_version']} ===")
     print(
         f"Tahmin {report['predictions']}, kazanan {report['wins']}, "
@@ -817,6 +818,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_shadow_metrics = sub.add_parser(
         "shadow-metrics", help="Report settled xG shadow predictions"
+    )
+    p_shadow_metrics.add_argument(
+        "--model-version", default=config.MODEL_SHADOW_VERSION
     )
     p_shadow_metrics.set_defaults(func=cmd_shadow_metrics)
 

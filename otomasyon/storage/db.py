@@ -645,6 +645,78 @@ class Database:
             ).fetchall()
         ]
 
+    def save_model_artifact(
+        self,
+        *,
+        run_date: str,
+        model_version: str,
+        trained_ts: int,
+        cutoff_ts: int,
+        sha256: str,
+        payload: bytes,
+        features: list[tuple],
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO model_artifacts
+                    (run_date, model_version, trained_ts, cutoff_ts, sha256,
+                     payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_date, model_version) DO UPDATE SET
+                    trained_ts=excluded.trained_ts,
+                    cutoff_ts=excluded.cutoff_ts,
+                    sha256=excluded.sha256,
+                    payload=excluded.payload
+                """,
+                (
+                    run_date,
+                    model_version,
+                    trained_ts,
+                    cutoff_ts,
+                    sha256,
+                    payload,
+                ),
+            )
+            self.conn.execute(
+                """
+                DELETE FROM model_team_features
+                WHERE run_date=? AND model_version=?
+                """,
+                (run_date, model_version),
+            )
+            self.conn.executemany(
+                """
+                INSERT INTO model_team_features
+                    (run_date, model_version, team_key, venue, weight, scored,
+                     conceded, matches, xg_matches, elo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                features,
+            )
+
+    def load_model_artifact(
+        self, model_version: str, *, run_date: str | None = None
+    ) -> dict | None:
+        if run_date is None:
+            row = self.conn.execute(
+                """
+                SELECT * FROM model_artifacts
+                WHERE model_version=?
+                ORDER BY trained_ts DESC LIMIT 1
+                """,
+                (model_version,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """
+                SELECT * FROM model_artifacts
+                WHERE model_version=? AND run_date=?
+                """,
+                (model_version, run_date),
+            ).fetchone()
+        return dict(row) if row else None
+
     def historical_dates(self) -> set[str]:
         return {
             row["match_date"]

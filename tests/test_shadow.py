@@ -1,3 +1,5 @@
+import pytest
+
 from otomasyon import service
 from otomasyon.settlement import MatchResult
 from otomasyon.storage import Database
@@ -48,14 +50,28 @@ def test_shadow_xg_predictions_are_isolated_persisted_and_settled(tmp_path):
             )
         db.conn.commit()
 
+    refresh = service.auto_model_refresh(path, now=NOW, force=True)
+    assert len(refresh["runs"]) == 2
+    with Database(path) as db:
+        assert db.count("model_artifacts") == 2
+        assert db.count("model_team_features") > 0
+    assert service.load_cached_model(
+        path, "xg-ou-v1", run_date="2026-08-08"
+    ) is not None
+
     captured = service.capture_shadow_predictions(
         path, events=[event], now=NOW
     )
-    assert captured["eligible"] == 1
-    assert captured["saved"] == 1
+    assert captured["eligible"] == 2
+    assert captured["saved"] == 2
+    assert captured["by_model"]["goal-elo-ou-v1"] == 1
+    assert captured["by_model"]["xg-ou-v1"] == 1
     with Database(path) as db:
         prediction = db.conn.execute(
-            "SELECT * FROM model_predictions"
+            """
+            SELECT * FROM model_predictions
+            WHERE model_version='xg-ou-v1'
+            """
         ).fetchone()
         db.conn.execute(
             "UPDATE model_predictions SET edge=0.10 WHERE id=?",
@@ -67,8 +83,26 @@ def test_shadow_xg_predictions_are_isolated_persisted_and_settled(tmp_path):
     else:
         result = MatchResult(900, 2, 1)
     service.record_result(path, result)
-    assert service.settle_shadow_predictions(path) == 1
+    assert service.settle_shadow_predictions(path) == 2
     metrics = service.shadow_model_metrics(path)
     assert metrics["predictions"] == 1
     assert metrics["wins"] == 1
     assert metrics["live_enabled"] is False
+
+
+def test_cached_model_checksum_rejects_corruption(tmp_path):
+    path = str(tmp_path / "corrupt.db")
+    with Database(path) as db:
+        db.save_model_artifact(
+            run_date="2026-08-08",
+            model_version="xg-ou-v1",
+            trained_ts=1,
+            cutoff_ts=1,
+            sha256="bad-hash",
+            payload=b"corrupt",
+            features=[],
+        )
+    with pytest.raises(RuntimeError, match="checksum"):
+        service.load_cached_model(
+            path, "xg-ou-v1", run_date="2026-08-08"
+        )

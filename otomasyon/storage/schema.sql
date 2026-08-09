@@ -204,6 +204,32 @@ CREATE TABLE IF NOT EXISTS model_training_runs (
     UNIQUE (run_date, model_version)
 );
 
+CREATE TABLE IF NOT EXISTS model_artifacts (
+    run_date          TEXT NOT NULL,
+    model_version     TEXT NOT NULL,
+    trained_ts        INTEGER NOT NULL,
+    cutoff_ts         INTEGER NOT NULL,
+    sha256            TEXT NOT NULL,
+    payload           BLOB NOT NULL,
+    PRIMARY KEY (run_date, model_version)
+);
+
+CREATE TABLE IF NOT EXISTS model_team_features (
+    run_date          TEXT NOT NULL,
+    model_version     TEXT NOT NULL,
+    team_key          TEXT NOT NULL,
+    venue             TEXT NOT NULL,
+    weight            REAL NOT NULL,
+    scored            REAL NOT NULL,
+    conceded          REAL NOT NULL,
+    matches           INTEGER NOT NULL,
+    xg_matches        INTEGER NOT NULL,
+    elo               REAL,
+    PRIMARY KEY (run_date, model_version, team_key, venue)
+);
+CREATE INDEX IF NOT EXISTS idx_model_features_team
+    ON model_team_features(model_version, team_key, run_date);
+
 CREATE TABLE IF NOT EXISTS clubelo_ratings (
     rating_date  TEXT NOT NULL,
     club_key     TEXT NOT NULL,

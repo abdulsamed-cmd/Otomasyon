@@ -118,6 +118,13 @@ xG senkronizasyonu başarılıysa `model_training_runs` tablosuna `ready` olarak
 kaydedilir. Sağlık raporu son eğitim zamanı ile kullanılan toplam/xG maç
 sayılarını gösterir.
 
+Günlük eğitim iki ayrı artifact üretir: `goal-elo-ou-v1` tüm yeterli güvenli
+resmi Alt/Üst 2.5 maçlarında gölge kanıt toplar; `xg-ou-v1` yalnız iki takımda
+da yeterli geçmiş xG varsa ek tahmin üretir. Artifact'ler SHA-256 ile
+doğrulanır ve takım/venue özellikleri `model_team_features` tablosunda
+sürümlenir. Saat 10:00 tahminleri geceki cache'i kullanır; modellerin sonuç ve
+kanıt kapıları birbirine karıştırılmaz.
+
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri
 lisansı/izin değerlendirmesi yapılmalıdır.

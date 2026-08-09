@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import time
 import math
+import hashlib
+import pickle
 import statistics
 from itertools import combinations
 from datetime import date, datetime, timedelta
@@ -345,13 +347,32 @@ def surprise_category_metrics(db_path: str) -> dict[str, dict]:
     return output
 
 
+def load_cached_model(
+    db_path: str,
+    model_version: str,
+    *,
+    run_date: str | None = None,
+):
+    """Load and verify a trusted internally-produced model artifact."""
+    with Database(db_path) as db:
+        artifact = db.load_model_artifact(
+            model_version, run_date=run_date
+        )
+    if artifact is None:
+        return None
+    payload = bytes(artifact["payload"])
+    if hashlib.sha256(payload).hexdigest() != artifact["sha256"]:
+        raise RuntimeError(f"model artifact checksum failed: {model_version}")
+    return pickle.loads(payload)
+
+
 def capture_shadow_predictions(
     db_path: str,
     *,
     events=None,
     now: datetime | None = None,
 ) -> dict:
-    """Persist report-only xG O/U predictions without changing coupons."""
+    """Persist separate goal/Elo and xG O/U shadow predictions."""
     from .eligibility import is_event_eligible
     from .model import GoalModel
 
@@ -359,10 +380,31 @@ def capture_shadow_predictions(
     now_ts = int(now.timestamp())
     if events is None:
         events, _ = get_live_events()
-    with Database(db_path) as db:
-        history = db.load_historical_matches(before_ts=now_ts)
-    model = GoalModel(history, now_ts, use_xg=True)
+    today = now.strftime("%Y-%m-%d")
+    models = {
+        config.MODEL_GOAL_SHADOW_VERSION: load_cached_model(
+            db_path, config.MODEL_GOAL_SHADOW_VERSION, run_date=today
+        ),
+        config.MODEL_SHADOW_VERSION: load_cached_model(
+            db_path, config.MODEL_SHADOW_VERSION, run_date=today
+        ),
+    }
+    if any(model is None for model in models.values()):
+        with Database(db_path) as db:
+            history = db.load_historical_matches(before_ts=now_ts)
+        if models[config.MODEL_GOAL_SHADOW_VERSION] is None:
+            models[config.MODEL_GOAL_SHADOW_VERSION] = GoalModel(
+                history, now_ts, use_xg=False
+            )
+        if models[config.MODEL_SHADOW_VERSION] is None:
+            models[config.MODEL_SHADOW_VERSION] = GoalModel(
+                history, now_ts, use_xg=True
+            )
     predictions = []
+    counts = {
+        config.MODEL_GOAL_SHADOW_VERSION: 0,
+        config.MODEL_SHADOW_VERSION: 0,
+    }
     for event in events:
         if not (now_ts < event.start_ts <= now_ts + 24 * 3600):
             continue
@@ -385,56 +427,63 @@ def capture_shadow_predictions(
         odds = market.odds
         if not all(odd is not None and odd > 1.0 for odd in odds):
             continue
-        prediction = model.predict(
-            event.home, event.away, event.competition_name
-        )
-        if (
-            prediction.xg_samples_home < 3
-            or prediction.xg_samples_away < 3
-        ):
-            continue
         fair = probability.fair_probs(odds)
-        choices = []
-        for index, selection in enumerate(market.selections):
-            key = (
-                "Alt 2.5"
-                if selection.name == "Alt"
-                else "Üst 2.5"
-                if selection.name == "Üst"
-                else None
+        for model_version, model in models.items():
+            prediction = model.predict(
+                event.home, event.away, event.competition_name
             )
-            if key:
-                choices.append(
-                    (
-                        prediction.probs[key] - fair[index],
-                        index,
-                        selection,
-                        key,
-                    )
+            if prediction.confidence < 0.35:
+                continue
+            if (
+                model_version == config.MODEL_SHADOW_VERSION
+                and (
+                    prediction.xg_samples_home < 3
+                    or prediction.xg_samples_away < 3
                 )
-        if not choices:
-            continue
-        edge, index, selection, key = max(choices)
-        predictions.append(
-            {
-                "model_version": config.MODEL_SHADOW_VERSION,
-                "for_date": now.strftime("%Y-%m-%d"),
-                "event_id": event.event_id,
-                "captured_ts": now_ts,
-                "market": "OU25",
-                "outcome_name": selection.name,
-                "odd": selection.odd,
-                "predicted_prob": prediction.probs[key],
-                "market_fair": fair[index],
-                "edge": edge,
-            }
-        )
+            ):
+                continue
+            choices = []
+            for index, selection in enumerate(market.selections):
+                key = (
+                    "Alt 2.5"
+                    if selection.name == "Alt"
+                    else "Üst 2.5"
+                    if selection.name == "Üst"
+                    else None
+                )
+                if key:
+                    choices.append(
+                        (
+                            prediction.probs[key] - fair[index],
+                            index,
+                            selection,
+                            key,
+                        )
+                    )
+            if not choices:
+                continue
+            edge, index, selection, key = max(choices)
+            predictions.append(
+                {
+                    "model_version": model_version,
+                    "for_date": today,
+                    "event_id": event.event_id,
+                    "captured_ts": now_ts,
+                    "market": "OU25",
+                    "outcome_name": selection.name,
+                    "odd": selection.odd,
+                    "predicted_prob": prediction.probs[key],
+                    "market_fair": fair[index],
+                    "edge": edge,
+                }
+            )
+            counts[model_version] += 1
     with Database(db_path) as db:
         saved = db.save_model_predictions(predictions)
     return {
         "eligible": len(predictions),
         "saved": saved,
-        "model_version": config.MODEL_SHADOW_VERSION,
+        "by_model": counts,
         "live_enabled": False,
     }
 
@@ -473,7 +522,9 @@ def settle_shadow_predictions(db_path: str) -> int:
     return settled
 
 
-def shadow_model_metrics(db_path: str) -> dict:
+def shadow_model_metrics(
+    db_path: str, model_version: str = config.MODEL_SHADOW_VERSION
+) -> dict:
     with Database(db_path) as db:
         rows = db.conn.execute(
             """
@@ -481,7 +532,7 @@ def shadow_model_metrics(db_path: str) -> dict:
             WHERE model_version=? AND result IN ('win','lose')
               AND edge>=?
             """,
-            (config.MODEL_SHADOW_VERSION, config.MODEL_MIN_EDGE),
+            (model_version, config.MODEL_MIN_EDGE),
         ).fetchall()
     profits = [
         row["odd"] - 1.0 if row["result"] == "win" else -1.0
@@ -499,7 +550,7 @@ def shadow_model_metrics(db_path: str) -> dict:
         else 0.0
     )
     return {
-        "model_version": config.MODEL_SHADOW_VERSION,
+        "model_version": model_version,
         "predictions": len(rows),
         "wins": sum(row["result"] == "win" for row in rows),
         "roi": roi,
@@ -1115,6 +1166,9 @@ def archive_and_notify(
 def model_status_text(db_path: str) -> str:
     processes = metrics_by_kind(db_path)
     shadow = shadow_model_metrics(db_path)
+    goal_shadow = shadow_model_metrics(
+        db_path, config.MODEL_GOAL_SHADOW_VERSION
+    )
     walk_forward = walk_forward_metrics(db_path)
     goals = surprise_category_metrics(db_path)["goals_6plus"]
     training = latest_model_training(db_path)
@@ -1193,6 +1247,20 @@ def model_status_text(db_path: str) -> str:
                 else "Brier: veri yok"
             ),
             f"Kapı: {'GEÇTİ' if shadow['gate_passed'] else 'BEKLİYOR'}",
+            "",
+            f"Gol+Elo gölge ({goal_shadow['model_version']}) — "
+            f"{goal_shadow['predictions']}/{config.MODEL_GATE_MIN_BETS} sonuç",
+            (
+                f"ROI {goal_shadow['roi']*100:+.1f}% "
+                f"[95% {goal_shadow['roi_ci95'][0]*100:+.1f}%.."
+                f"{goal_shadow['roi_ci95'][1]*100:+.1f}%]"
+            ),
+            (
+                f"Brier: {goal_shadow['brier']:.3f}"
+                if goal_shadow["brier"] is not None
+                else "Brier: veri yok"
+            ),
+            f"Kapı: {'GEÇTİ' if goal_shadow['gate_passed'] else 'BEKLİYOR'}",
             "",
             (
                 f"6+ Gol — {goals['candidates']} sonuç, "
@@ -1552,7 +1620,7 @@ def auto_model_refresh(
     now: datetime | None = None,
     force: bool = False,
 ) -> dict:
-    """Fit the daily model after archive+xG sync and persist training metadata."""
+    """Fit/cache daily goal and xG models after archive+xG synchronization."""
     from .model import GoalModel
 
     now = now or datetime.now(tz=config.TIMEZONE)
@@ -1563,63 +1631,109 @@ def auto_model_refresh(
             return {"skipped": True, "reason": "xg_not_ready"}
         existing = db.conn.execute(
             """
-            SELECT * FROM model_training_runs
-            WHERE run_date=? AND model_version=?
+            SELECT model_version FROM model_training_runs
+            WHERE run_date=? AND model_version IN (?, ?)
             """,
-            (today, config.MODEL_SHADOW_VERSION),
-        ).fetchone()
-        if existing is not None and not force:
+            (
+                today,
+                config.MODEL_SHADOW_VERSION,
+                config.MODEL_GOAL_SHADOW_VERSION,
+            ),
+        ).fetchall()
+        if len(existing) == 2 and not force:
             return {
                 "skipped": True,
                 "reason": "already_trained",
-                "run": dict(existing),
+                "runs": [dict(row) for row in existing],
             }
         history = db.load_historical_matches(before_ts=now_ts)
-    model = GoalModel(history, now_ts, use_xg=True)
-    xg_matches = sum(
-        row.get("xg_home") is not None and row.get("xg_away") is not None
-        for row in model.history
+    runs = []
+    definitions = (
+        (config.MODEL_GOAL_SHADOW_VERSION, False),
+        (config.MODEL_SHADOW_VERSION, True),
     )
-    values = (
-        today,
-        config.MODEL_SHADOW_VERSION,
-        now_ts,
-        now_ts,
-        len(model.history),
-        xg_matches,
-        len(model.stats),
-        "ready",
-    )
-    with Database(db_path) as db:
-        db.conn.execute(
-            """
-            INSERT INTO model_training_runs
-                (run_date, model_version, trained_ts, cutoff_ts,
-                 history_matches, xg_matches, team_scopes, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_date, model_version) DO UPDATE SET
-                trained_ts=excluded.trained_ts,
-                cutoff_ts=excluded.cutoff_ts,
-                history_matches=excluded.history_matches,
-                xg_matches=excluded.xg_matches,
-                team_scopes=excluded.team_scopes,
-                status=excluded.status
-            """,
-            values,
+    for model_version, use_xg in definitions:
+        model = GoalModel(history, now_ts, use_xg=use_xg)
+        xg_matches = sum(
+            row.get("xg_home") is not None
+            and row.get("xg_away") is not None
+            for row in model.history
         )
-        db.set_setting("last_model_training_date", today)
-        db.conn.commit()
+        payload = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
+        digest = hashlib.sha256(payload).hexdigest()
+        features = [
+            (
+                today,
+                model_version,
+                team_key,
+                venue,
+                item["weight"],
+                item["scored"],
+                item["conceded"],
+                item["n"],
+                item["xg_n"],
+                model.elo.get(team_key),
+            )
+            for (team_key, venue), item in model.stats.items()
+        ]
+        values = (
+            today,
+            model_version,
+            now_ts,
+            now_ts,
+            len(model.history),
+            xg_matches,
+            len(model.stats),
+            "ready",
+        )
+        with Database(db_path) as db:
+            db.save_model_artifact(
+                run_date=today,
+                model_version=model_version,
+                trained_ts=now_ts,
+                cutoff_ts=now_ts,
+                sha256=digest,
+                payload=payload,
+                features=features,
+            )
+            db.conn.execute(
+                """
+                INSERT INTO model_training_runs
+                    (run_date, model_version, trained_ts, cutoff_ts,
+                     history_matches, xg_matches, team_scopes, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_date, model_version) DO UPDATE SET
+                    trained_ts=excluded.trained_ts,
+                    cutoff_ts=excluded.cutoff_ts,
+                    history_matches=excluded.history_matches,
+                    xg_matches=excluded.xg_matches,
+                    team_scopes=excluded.team_scopes,
+                    status=excluded.status
+                """,
+                values,
+            )
+            db.set_setting("last_model_training_date", today)
+            db.conn.commit()
+        runs.append(
+            {
+                "run_date": today,
+                "model_version": model_version,
+                "trained_ts": now_ts,
+                "history_matches": len(model.history),
+                "xg_matches": xg_matches,
+                "team_scopes": len(model.stats),
+                "feature_rows": len(features),
+                "artifact_sha256": digest,
+                "status": "ready",
+            }
+        )
+    xg_run = next(
+        run for run in runs if run["model_version"] == config.MODEL_SHADOW_VERSION
+    )
     return {
         "skipped": False,
-        "run": {
-            "run_date": today,
-            "model_version": config.MODEL_SHADOW_VERSION,
-            "trained_ts": now_ts,
-            "history_matches": len(model.history),
-            "xg_matches": xg_matches,
-            "team_scopes": len(model.stats),
-            "status": "ready",
-        },
+        "run": xg_run,
+        "runs": runs,
     }
 
 
@@ -1628,8 +1742,10 @@ def latest_model_training(db_path: str) -> dict | None:
         row = db.conn.execute(
             """
             SELECT * FROM model_training_runs
+            WHERE model_version=?
             ORDER BY trained_ts DESC LIMIT 1
-            """
+            """,
+            (config.MODEL_SHADOW_VERSION,),
         ).fetchone()
     return dict(row) if row else None
 
