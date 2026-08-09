@@ -47,6 +47,11 @@ class Telegram:
         if self.fail:
             raise RuntimeError("telegram unavailable")
         self.sent.append((chat_id, text))
+        return {
+            "message_id": 100 + len(self.sent),
+            "date": 1786258800,
+            "chat": {"id": int(chat_id)},
+        }
 
 
 class Understat:
