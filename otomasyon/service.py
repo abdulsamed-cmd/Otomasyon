@@ -141,6 +141,62 @@ def push_daily(
     return chat_id
 
 
+def check_bot_liveness(
+    db_path: str, client, *, now: float | None = None
+) -> str | None:
+    """Announce when the bot stops polling Telegram, and when it recovers.
+
+    A stalled or dead bot cannot report its own silence, so the scheduler
+    watches the poll heartbeat instead. Transitions are reported once each, so
+    an outage produces one warning and one all-clear rather than a stream.
+    """
+    now = int(now if now is not None else time.time())
+    with Database(db_path) as db:
+        runtime = db.telegram_bot_runtime()
+        chat_id = db.get_setting("telegram_chat_id")
+        if runtime is None or not chat_id:
+            return None
+        last_poll = runtime.get("last_poll_ts") or runtime.get("heartbeat_ts") or 0
+        silent_for = now - int(last_poll)
+        stale = silent_for > config.TELEGRAM_WATCHDOG_STALE_SECONDS
+        previous = db.get_setting("telegram_watchdog_status") or "ok"
+
+    if stale and previous != "stale":
+        minutes = silent_for // 60
+        text = (
+            "UYARI: Telegram botu yanıt vermiyor.\n"
+            f"Son başarılı bağlantı {minutes} dakika önce.\n"
+            "Komutlarınız kaybolmaz; bot döndüğünde sırayla yanıtlanır."
+        )
+        transition = "alerted"
+    elif not stale and previous == "stale":
+        text = (
+            "Telegram botu tekrar çalışıyor. "
+            "Bekleyen komutlarınız işlendi."
+        )
+        transition = "recovered"
+    else:
+        return None
+
+    response = client.send_message(chat_id, text)
+    delivered_chat_id, message_id, telegram_date = _telegram_delivery(
+        response, chat_id
+    )
+    with Database(db_path) as db:
+        # The status marker is written with the receipt, so a crash between the
+        # two can never suppress a warning that was never delivered.
+        db.record_telegram_delivery(
+            kind="bot_watchdog",
+            notification_dates=[f"{transition}:{now}"],
+            chat_id=delivered_chat_id,
+            message_id=message_id,
+            telegram_date=telegram_date,
+            sent_ts=now,
+            markers={"telegram_watchdog_status": "stale" if stale else "ok"},
+        )
+    return transition
+
+
 def record_result(db_path: str, result: settlement.MatchResult) -> None:
     with Database(db_path) as db:
         db.save_result(result)

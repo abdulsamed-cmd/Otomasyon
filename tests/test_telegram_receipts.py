@@ -217,3 +217,47 @@ def test_legacy_receipt_schema_is_migrated_and_remains_deduplicated(tmp_path):
             )["message_id"]
             == 701
         )
+
+
+def _bot_runtime(path, *, last_poll_ts, owner="watch"):
+    with Database(path) as db:
+        db.acquire_telegram_bot_lease(owner, last_poll_ts, 45)
+        db.record_telegram_poll(owner, last_poll_ts, ok=True)
+
+
+def test_watchdog_reports_a_silent_bot_once_and_then_its_recovery(tmp_path):
+    """A dead bot cannot report itself, so the scheduler announces the silence."""
+    path = str(tmp_path / "watchdog.db")
+    _chat(path)
+    _bot_runtime(path, last_poll_ts=1_000)
+    telegram = Telegram()
+
+    fresh = 1_000 + config.TELEGRAM_WATCHDOG_STALE_SECONDS
+    assert service.check_bot_liveness(path, telegram, now=fresh) is None
+    assert telegram.sent == []
+
+    stale = fresh + 1
+    assert service.check_bot_liveness(path, telegram, now=stale) == "alerted"
+    assert "yanıt vermiyor" in telegram.sent[0][1]
+
+    # The same outage must not be announced again on every scheduler cycle.
+    assert service.check_bot_liveness(path, telegram, now=stale + 600) is None
+    assert len(telegram.sent) == 1
+
+    with Database(path) as db:
+        db.record_telegram_poll("watch", stale + 700, ok=True)
+    assert (
+        service.check_bot_liveness(path, telegram, now=stale + 700) == "recovered"
+    )
+    assert "tekrar çalışıyor" in telegram.sent[1][1]
+    assert service.check_bot_liveness(path, telegram, now=stale + 800) is None
+    assert len(telegram.sent) == 2
+
+
+def test_watchdog_is_silent_before_the_user_has_a_chat(tmp_path):
+    path = str(tmp_path / "no-chat.db")
+    _bot_runtime(path, last_poll_ts=1_000)
+    telegram = Telegram()
+
+    assert service.check_bot_liveness(path, telegram, now=999_999) is None
+    assert telegram.sent == []

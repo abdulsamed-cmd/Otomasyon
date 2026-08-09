@@ -50,31 +50,39 @@ def cmd_surprise(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_bot(args: argparse.Namespace) -> int:
+def _run_bot_once(db_path: str, username: str) -> None:
+    """One bot lifetime: a fresh client and database handle, then poll."""
     from .telegram import Bot, TelegramClient
 
-    username = config.telegram_allowed_username()
-    if not username:
-        print("HATA: TELEGRAM_ALLOWED_USERNAME tanımlı değil.")
-        return 1
     client = TelegramClient()
     me = client.get_me()
     print(
         f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}"
     )
+    with Database(db_path) as db:
+        Bot(
+            client,
+            username,
+            on_daily=lambda: service.daily_text(db_path),
+            on_surprise=lambda: service.surprise_text(db_path),
+            on_lineup=lambda: service.lineup_risk_text(db_path),
+            on_status=lambda: service.model_status_text(db_path),
+            db=db,
+        ).run()
 
-    db = Database(args.db)
-    bot = Bot(
-        client,
-        username,
-        on_daily=lambda: service.daily_text(args.db),
-        on_surprise=lambda: service.surprise_text(args.db),
-        on_lineup=lambda: service.lineup_risk_text(args.db),
-        on_status=lambda: service.model_status_text(args.db),
-        db=db,
-    )
-    bot.run()
-    return 0
+
+def cmd_bot(args: argparse.Namespace) -> int:
+    from .telegram import supervise
+
+    username = config.telegram_allowed_username()
+    if not username:
+        print("HATA: TELEGRAM_ALLOWED_USERNAME tanımlı değil.")
+        return 1
+
+    if args.no_supervise:
+        _run_bot_once(args.db, username)
+        return 0
+    return supervise(lambda: _run_bot_once(args.db, username))
 
 
 def cmd_scheduler(args: argparse.Namespace) -> int:
@@ -90,6 +98,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
+        liveness_callback=lambda: service.check_bot_liveness(args.db, client),
         interval=args.interval,
         db_path=args.db,
     )
@@ -654,6 +663,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_surprise.set_defaults(func=cmd_surprise)
 
     p_bot = sub.add_parser("bot", help="Run the single-user Telegram bot")
+    p_bot.add_argument(
+        "--no-supervise",
+        action="store_true",
+        help="Exit on failure instead of restarting the bot automatically",
+    )
     p_bot.set_defaults(func=cmd_bot)
 
     p_scheduler = sub.add_parser(

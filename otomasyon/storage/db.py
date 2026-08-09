@@ -39,7 +39,26 @@ class Database:
             )
         ]
         self._migrate_telegram_delivery_receipts(after_columns)
+        self._migrate_telegram_bot_runtime()
         self.conn.commit()
+
+    def _migrate_telegram_bot_runtime(self) -> None:
+        """Add poll-health columns to runtime tables created before them."""
+        columns = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(telegram_bot_runtime)")
+        }
+        additions = (
+            ("last_poll_ts", "INTEGER"),
+            ("poll_failures", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_poll_error", "TEXT"),
+        )
+        with self.conn:
+            for name, definition in additions:
+                if name not in columns:
+                    self.conn.execute(
+                        f"ALTER TABLE telegram_bot_runtime ADD COLUMN {name} {definition}"
+                    )
 
     def _migrate_telegram_delivery_receipts(self, columns: list[str]) -> None:
         """Bring pre-notification-date receipt tables up to the current schema."""
@@ -1726,6 +1745,30 @@ class Database:
             "SELECT * FROM telegram_bot_runtime WHERE singleton_id=1"
         ).fetchone()
         return dict(row) if row is not None else None
+
+    def record_telegram_poll(
+        self, owner_id: str, now: int, *, ok: bool, error: str | None = None
+    ) -> None:
+        """Record the outcome of one getUpdates round trip for the lease owner."""
+        with self.conn:
+            if ok:
+                self.conn.execute(
+                    """
+                    UPDATE telegram_bot_runtime
+                    SET last_poll_ts=?, poll_failures=0, last_poll_error=NULL
+                    WHERE singleton_id=1 AND owner_id=?
+                    """,
+                    (int(now), owner_id),
+                )
+            else:
+                self.conn.execute(
+                    """
+                    UPDATE telegram_bot_runtime
+                    SET poll_failures=poll_failures + 1, last_poll_error=?
+                    WHERE singleton_id=1 AND owner_id=?
+                    """,
+                    (error, owner_id),
+                )
 
     def release_telegram_bot_lease(self, owner_id: str, now: int) -> bool:
         with self.conn:

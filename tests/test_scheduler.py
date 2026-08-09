@@ -97,3 +97,19 @@ def test_continuous_loop_stops_cleanly_on_interrupt(monkeypatch):
         "history", "xg", "refresh", "model", "push", "result", "context",
     ]
     assert sleeps == 2
+
+
+def test_bot_liveness_runs_first_and_is_isolated():
+    """Silence must be reported before slower jobs get a chance to fail."""
+    calls = []
+
+    def failing_liveness():
+        calls.append("liveness")
+        raise RuntimeError("telegram unreachable")
+
+    _scheduler(calls, liveness_callback=failing_liveness).run_cycle()
+
+    assert calls[0] == "liveness"
+    assert calls[1:] == [
+        "history", "xg", "refresh", "model", "push", "result", "context"
+    ]

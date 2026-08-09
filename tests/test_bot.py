@@ -1,5 +1,6 @@
 import pytest
 
+from otomasyon import config
 from otomasyon.storage import Database
 from otomasyon.telegram import bot as bot_module
 from otomasyon.telegram.bot import Bot, HELP
@@ -372,22 +373,114 @@ def test_single_instance_lease_heartbeats_and_expires(tmp_path):
     first = _durable_bot(path, PlannedTelegram([]), clock, owner_id="first")
     second = _durable_bot(path, PlannedTelegram([]), clock, owner_id="second")
 
+    lease = config.TELEGRAM_BOT_LEASE_SECONDS
+
     assert first.poll_once(timeout=0) == 0
     with Database(path) as db:
         runtime = db.telegram_bot_runtime()
         assert runtime["owner_id"] == "first"
         assert runtime["heartbeat_ts"] == 1_000
-        assert runtime["lease_expires_ts"] == 1_300
+        assert runtime["lease_expires_ts"] == 1_000 + lease
 
     with pytest.raises(bot_module.BotLeaseError):
         second.poll_once(timeout=0)
 
-    clock.advance(300)
+    clock.advance(lease)
     assert second.poll_once(timeout=0) == 0
     with Database(path) as db:
         runtime = db.telegram_bot_runtime()
         assert runtime["owner_id"] == "second"
-        assert runtime["heartbeat_ts"] == 1_300
+        assert runtime["heartbeat_ts"] == 1_000 + lease
+
+
+def test_crashed_bot_is_taken_over_within_a_minute():
+    """An unclean exit must not silence commands for minutes."""
+    assert config.TELEGRAM_BOT_LEASE_SECONDS <= 60
+
+
+def test_failed_poll_keeps_offset_so_the_message_arrives_next_poll(tmp_path):
+    """A dropped long-poll connection must delay a reply, never lose it."""
+    path = str(tmp_path / "poll-failure.db")
+    update = _update(210, "AbdulsamedErden", "durum", chat_id=42)
+    client = PlannedTelegram(
+        polls=[TimeoutError("read timed out"), [update]]
+    )
+    clock = Clock()
+    bot = _durable_bot(path, client, clock, owner_id="poller")
+
+    with pytest.raises(TimeoutError):
+        bot.poll_once(timeout=0)
+    with Database(path) as db:
+        runtime = db.telegram_bot_runtime()
+        assert runtime["poll_failures"] == 1
+        assert runtime["last_poll_ts"] is None
+        assert "read timed out" in runtime["last_poll_error"]
+        assert db.telegram_poll_offset() is None
+
+    clock.advance(1)
+    assert bot.poll_once(timeout=0) == 1
+    assert client.sent == [("42", "STATUS")]
+    with Database(path) as db:
+        runtime = db.telegram_bot_runtime()
+        assert runtime["poll_failures"] == 0
+        assert runtime["last_poll_ts"] == 1_001
+        assert runtime["last_poll_error"] is None
+
+
+def test_repeated_poll_failures_rebuild_the_connection(tmp_path):
+    """A dead pooled socket is retired instead of stalling every poll."""
+    path = str(tmp_path / "poll-reset.db")
+
+    class ResettableClient(PlannedTelegram):
+        def __init__(self):
+            super().__init__(polls=[TimeoutError("stalled")] * 3)
+            self.resets = 0
+
+        def reset_connections(self):
+            self.resets += 1
+
+    client = ResettableClient()
+    bot = _durable_bot(
+        path, client, Clock(), owner_id="reset", poll_reset_after_failures=3
+    )
+
+    for _ in range(2):
+        with pytest.raises(TimeoutError):
+            bot.poll_once(timeout=0)
+    assert client.resets == 0
+
+    with pytest.raises(TimeoutError):
+        bot.poll_once(timeout=0)
+    assert client.resets == 1
+
+
+def test_poll_recovery_retries_within_a_second(tmp_path):
+    """Recovery must not add a fixed penalty while the user is waiting."""
+    path = str(tmp_path / "backoff.db")
+    delays = []
+
+    class FailThenStop(PlannedTelegram):
+        def __init__(self):
+            super().__init__(
+                polls=[
+                    TimeoutError("first"),
+                    TimeoutError("second"),
+                    KeyboardInterrupt(),
+                ]
+            )
+
+    bot = _durable_bot(
+        path,
+        FailThenStop(),
+        Clock(),
+        owner_id="backoff",
+        sleep=delays.append,
+    )
+    bot.run(poll_timeout=0)
+
+    assert delays[0] <= 1.0
+    assert delays == sorted(delays)
+    assert max(delays) <= config.TELEGRAM_POLL_RETRY_MAX_SECONDS
 
 
 def test_allow_list_rejection_is_audited_without_outbox(tmp_path):

@@ -435,12 +435,18 @@ CREATE INDEX IF NOT EXISTS idx_telegram_command_audit_update
 
 -- One bot process may own the polling lease.  Heartbeats make stale ownership
 -- recoverable without coupling the independently deployed scheduler process.
+-- ``last_poll_ts`` advances only on a completed getUpdates round trip, so a bot
+-- that is running but unable to reach Telegram is distinguishable from a
+-- healthy one and can be reported as stale.
 CREATE TABLE IF NOT EXISTS telegram_bot_runtime (
     singleton_id    INTEGER PRIMARY KEY CHECK (singleton_id = 1),
     owner_id        TEXT NOT NULL,
     started_ts      INTEGER NOT NULL,
     heartbeat_ts    INTEGER NOT NULL,
-    lease_expires_ts INTEGER NOT NULL
+    lease_expires_ts INTEGER NOT NULL,
+    last_poll_ts    INTEGER,
+    poll_failures   INTEGER NOT NULL DEFAULT 0,
+    last_poll_error TEXT
 );
 
 -- Durable lifecycle audit for each scheduler callback invocation.

@@ -86,6 +86,26 @@ SURPRISE_UNIT_STAKE = 20.0
 # sizes are still persisted and reported, but are not pooled into this ROI.
 SURPRISE_TRACK_SYSTEM_SIZE = 2
 
+# --- Telegram polling liveness ---------------------------------------------
+# A long poll holds an idle connection open, which NAT gateways drop silently.
+# A short poll bounds how long a dropped connection can hide new messages, and
+# keep-alive probes on the socket surface the drop sooner still.
+TELEGRAM_POLL_TIMEOUT_SECONDS = 15
+# A failed poll is retried almost immediately: the user is already waiting.
+TELEGRAM_POLL_RETRY_BASE_SECONDS = 0.5
+TELEGRAM_POLL_RETRY_MAX_SECONDS = 5.0
+# Consecutive poll failures before the connection pool is rebuilt outright.
+TELEGRAM_POLL_RESET_AFTER_FAILURES = 3
+# Lease held by the live bot process. A crashed process cannot answer, so the
+# lease must expire quickly enough for a restart to take over unnoticed.
+TELEGRAM_BOT_LEASE_SECONDS = 45
+# Supervisor restart backoff after an unexpected bot exit.
+TELEGRAM_SUPERVISOR_BACKOFF_SECONDS = 2.0
+TELEGRAM_SUPERVISOR_MAX_BACKOFF_SECONDS = 30.0
+# The scheduler warns the user when the bot stops polling for this long, so a
+# dead bot is announced instead of silently swallowing commands.
+TELEGRAM_WATCHDOG_STALE_SECONDS = 5 * 60
+
 # --- Proactive delivery ----------------------------------------------------
 # Local hour (Europe/Istanbul) at which the daily coupon is pushed to the user
 # even if they never type "bugün". Chosen to be well before typical kickoffs.

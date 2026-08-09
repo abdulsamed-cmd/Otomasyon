@@ -16,6 +16,7 @@ import time
 import uuid
 from collections.abc import Callable
 
+from .. import config
 from ..storage import Database
 
 HELP = (
@@ -53,11 +54,13 @@ class Bot:
         on_status: Callable[[], str] | None = None,
         db=None,
         clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
         owner_id: str | None = None,
-        lease_seconds: int = 300,
+        lease_seconds: int = config.TELEGRAM_BOT_LEASE_SECONDS,
         max_send_attempts: int = 4,
         retry_base_seconds: int = 2,
         retry_max_seconds: int = 30,
+        poll_reset_after_failures: int = config.TELEGRAM_POLL_RESET_AFTER_FAILURES,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -67,12 +70,15 @@ class Bot:
         self.on_status = on_status
         self.db = db or Database(":memory:")
         self.clock = clock
+        self.sleep = sleep
         self.owner_id = owner_id or uuid.uuid4().hex
         self.lease_seconds = lease_seconds
         self.max_send_attempts = max_send_attempts
         self.retry_base_seconds = retry_base_seconds
         self.retry_max_seconds = retry_max_seconds
+        self.poll_reset_after_failures = poll_reset_after_failures
         self._recovered = False
+        self._poll_failures = 0
         self._offset = self.db.telegram_poll_offset()
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -256,7 +262,36 @@ class Bot:
             )
         return sent
 
-    def poll_once(self, timeout: int = 25) -> int:
+    def _reset_connection(self) -> None:
+        reset = getattr(self.client, "reset_connections", None)
+        if callable(reset):
+            reset()
+
+    def _fetch_updates(self, timeout: int | None) -> list[dict]:
+        """Fetch updates, recording poll health so stalls are observable."""
+        try:
+            updates = self.client.get_updates(
+                offset=self.db.telegram_poll_offset(), timeout=timeout
+            )
+        except Exception as exc:
+            self._poll_failures += 1
+            self.db.record_telegram_poll(
+                self.owner_id,
+                int(self.clock()),
+                ok=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            # Repeated failures mean the pooled socket is unusable, not that
+            # Telegram is down; dial a fresh connection before messages pile up.
+            if self._poll_failures >= self.poll_reset_after_failures:
+                self._reset_connection()
+                self._poll_failures = 0
+            raise
+        self._poll_failures = 0
+        self.db.record_telegram_poll(self.owner_id, int(self.clock()), ok=True)
+        return updates
+
+    def poll_once(self, timeout: int | None = None) -> int:
         now = int(self.clock())
         self._renew_lease(now)
 
@@ -265,9 +300,7 @@ class Bot:
         sent = self._process_outbox()
 
         self._renew_lease(int(self.clock()))
-        updates = self.client.get_updates(
-            offset=self.db.telegram_poll_offset(), timeout=timeout
-        )
+        updates = self._fetch_updates(timeout)
         self._offset = self.db.persist_telegram_updates(
             updates, int(self.clock())
         )
@@ -276,22 +309,26 @@ class Bot:
         self._renew_lease(int(self.clock()))
         return sent
 
-    def run(self, poll_timeout: int = 25) -> None:
+    def run(self, poll_timeout: int | None = None) -> None:
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
+        backoff = config.TELEGRAM_POLL_RETRY_BASE_SECONDS
         try:
             while True:
                 try:
-                    try:
-                        self.poll_once(poll_timeout)
-                    except Exception as exc:
-                        print(f"Bot hata (devam ediliyor): {exc}")
-                        time.sleep(3)
-                except KeyboardInterrupt:  # pragma: no cover
+                    self.poll_once(poll_timeout)
+                except KeyboardInterrupt:
                     print("Bot durduruluyor.")
                     return
-                except Exception as exc:  # pragma: no cover - resilience loop
-                    print(f"Bot hata (devam ediliyor): {exc}")
-                    time.sleep(3)
+                except Exception as exc:
+                    # The user is already waiting, so recover in under a second
+                    # rather than adding a fixed penalty to every hiccup.
+                    print(f"Bot yoklama hatası (yeniden deneniyor): {exc}")
+                    self.sleep(backoff)
+                    backoff = min(
+                        backoff * 2, config.TELEGRAM_POLL_RETRY_MAX_SECONDS
+                    )
+                else:
+                    backoff = config.TELEGRAM_POLL_RETRY_BASE_SECONDS
         finally:
             self.db.release_telegram_bot_lease(
                 self.owner_id, int(self.clock())

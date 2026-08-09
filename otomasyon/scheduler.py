@@ -28,10 +28,18 @@ class Scheduler:
         push_callback: Callable[[], object],
         result_callback: Callable[[], object],
         context_callback: Callable[[], object],
+        liveness_callback: Callable[[], object] | None = None,
         interval: float,
         db_path: str | None = None,
     ) -> None:
         self.callbacks = (
+            # Bot liveness runs first: if commands are going unanswered, the
+            # user should hear about it before any slower job is attempted.
+            *(
+                (ScheduledCallback("bot liveness", liveness_callback),)
+                if liveness_callback is not None
+                else ()
+            ),
             ScheduledCallback("history archive", history_callback),
             ScheduledCallback("xG sync", xg_sync_callback),
             ScheduledCallback("model refresh", model_refresh_callback),
