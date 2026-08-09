@@ -38,14 +38,18 @@ def test_continuous_loop_stops_cleanly_on_interrupt(monkeypatch):
     calls = []
     sleeps = 0
 
-    def interrupt_after_first_cycle(_interval):
+    def interrupt_after_two_cycles(_interval):
         nonlocal sleeps
         sleeps += 1
-        raise KeyboardInterrupt
+        if sleeps == 2:
+            raise KeyboardInterrupt
 
-    monkeypatch.setattr(scheduler_module.time, "sleep", interrupt_after_first_cycle)
+    monkeypatch.setattr(scheduler_module.time, "sleep", interrupt_after_two_cycles)
 
     _scheduler(calls).run()
 
-    assert calls == ["model", "push", "result", "context", "history"]
-    assert sleeps == 1
+    assert calls == [
+        "model", "push", "result", "context", "history",
+        "model", "push", "result", "context", "history",
+    ]
+    assert sleeps == 2
