@@ -313,14 +313,12 @@ def drain_notifications(db_path: str, client, *, now: int | None = None) -> dict
                         * (2 ** max(0, row["attempts"] - 1)),
                         config.NOTIFICATION_RETRY_MAX_SECONDS,
                     )
-                    db.retry_notification_send(
-                        row["id"], detail, int(time.time()) + delay
-                    )
+                    db.retry_notification_send(row["id"], detail, now + delay)
                     retried += 1
             continue
         with Database(db_path) as db:
             db.complete_notification_send(
-                row["id"], message_id=message_id, now=int(time.time())
+                row["id"], message_id=message_id, now=now
             )
         sent += 1
     return {"sent": sent, "retried": retried, "failed": failed}

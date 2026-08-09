@@ -175,7 +175,7 @@ def test_delivery_gives_up_after_a_bounded_number_of_attempts(tmp_path):
     service.queue_missing_settlement_notifications(path)
 
     telegram = Telegram([RuntimeError("down")] * 50)
-    now = 1_786_300_000
+    now = 2_000_000_000
     for _ in range(config.NOTIFICATION_MAX_ATTEMPTS + 1):
         now += config.NOTIFICATION_RETRY_MAX_SECONDS
         service.drain_notifications(path, telegram, now=now)
