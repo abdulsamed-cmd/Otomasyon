@@ -92,13 +92,46 @@ def surprise_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
     return formatting.format_surprise(report)
 
 
-def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
+def _telegram_delivery(response: object, chat_id: int | str) -> tuple[str, int, int | None]:
+    """Validate Telegram's successful sendMessage result."""
+    if not isinstance(response, dict) or response.get("message_id") is None:
+        raise RuntimeError("Telegram sendMessage returned no delivery receipt")
+    response_chat = response.get("chat")
+    delivered_chat_id = (
+        response_chat.get("id")
+        if isinstance(response_chat, dict) and response_chat.get("id") is not None
+        else chat_id
+    )
+    telegram_date = response.get("date")
+    return (
+        str(delivered_chat_id),
+        int(response["message_id"]),
+        int(telegram_date) if telegram_date is not None else None,
+    )
+
+
+def push_daily(
+    db_path: str,
+    client,
+    *,
+    force: bool = False,
+    now: datetime | None = None,
+) -> str | None:
     """Proactively send today's daily coupon to the stored chat.
 
     De-duplicated per day via the ``last_push_date`` setting, so it is safe to
     call repeatedly. Returns the chat id sent to, or None if skipped.
     """
-    today = datetime.now(tz=config.TIMEZONE).strftime("%Y-%m-%d")
+    now = now or datetime.now(tz=config.TIMEZONE)
+    scheduled = now.replace(
+        hour=config.DAILY_PUSH_HOUR,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if not force and now < scheduled:
+        return None
+    today = now.strftime("%Y-%m-%d")
     # region agent log
     _debug_log("A", "service.py:push_daily", "daily gate inputs", {"today": today, "force": force})
     # endregion
@@ -114,8 +147,19 @@ def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
     # region agent log
     _debug_log("B,C", "service.py:push_daily", "daily send returned", {"response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
     # endregion
+    delivered_chat_id, message_id, telegram_date = _telegram_delivery(
+        response, chat_id
+    )
     with Database(db_path) as db:
-        db.set_setting("last_push_date", today)
+        db.record_telegram_delivery(
+            kind="daily_push",
+            notification_dates=[today],
+            chat_id=delivered_chat_id,
+            message_id=message_id,
+            telegram_date=telegram_date,
+            sent_ts=int(now.timestamp()),
+            markers={"last_push_date": today},
+        )
     return chat_id
 
 
@@ -851,9 +895,23 @@ def notify_completed_history_archives(
     # region agent log
     _debug_log("B,C", "service.py:notify_completed_history_archives", "archive send returned", {"date_count": len(dates), "response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
     # endregion
+    delivered_chat_id, message_id, telegram_date = _telegram_delivery(
+        response, chat_id
+    )
+    sent_ts = int(now.timestamp())
     with Database(db_path) as db:
-        for day in dates:
-            db.set_setting(f"history_archive_notified:{day}", str(int(now.timestamp())))
+        db.record_telegram_delivery(
+            kind="history_archive",
+            notification_dates=dates,
+            chat_id=delivered_chat_id,
+            message_id=message_id,
+            telegram_date=telegram_date,
+            sent_ts=sent_ts,
+            markers={
+                f"history_archive_notified:{day}": str(sent_ts)
+                for day in dates
+            },
+        )
     return dates
 
 
@@ -988,8 +1046,19 @@ def push_model_status(
     # region agent log
     _debug_log("B,C", "service.py:push_model_status", "model status send returned", {"response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
     # endregion
+    delivered_chat_id, message_id, telegram_date = _telegram_delivery(
+        response, chat_id
+    )
     with Database(db_path) as db:
-        db.set_setting("last_model_status_date", today)
+        db.record_telegram_delivery(
+            kind="model_status",
+            notification_dates=[today],
+            chat_id=delivered_chat_id,
+            message_id=message_id,
+            telegram_date=telegram_date,
+            sent_ts=int(now.timestamp()),
+            markers={"last_model_status_date": today},
+        )
     return chat_id
 
 

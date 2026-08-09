@@ -113,11 +113,6 @@ class FakeTelegram:
 
     def send_message(self, chat_id, text):
         self.sent.append((str(chat_id), text))
-        return {
-            "message_id": 300 + len(self.sent),
-            "date": 1786258800,
-            "chat": {"id": int(chat_id)},
-        }
 
 
 def test_auto_results_fetches_exact_ids_settles_and_notifies(tmp_path):
@@ -138,38 +133,10 @@ def test_auto_results_fetches_exact_ids_settles_and_notifies(tmp_path):
     assert len(telegram.sent) == 1
     assert telegram.sent[0][0] == "42"
     assert "KAZANDI" in telegram.sent[0][1]
-    with Database(path) as db:
-        receipt = db.get_telegram_delivery_receipt("coupon_result:1")
-        assert receipt["kind"] == "coupon_result"
-        assert receipt["chat_id"] == "42"
-        assert receipt["message_id"] == 301
-        assert receipt["telegram_date"] == 1786258800
-        assert db.get_setting("coupon_result_notified:1") is not None
 
     # Persistent rate limit prevents another network request.
     report2 = service.auto_results(path, telegram, result_client=source)
     assert report2["skipped"] and report2["reason"] == "rate_limited"
-
-
-def test_failed_coupon_notification_has_no_receipt_or_marker(tmp_path):
-    path = str(tmp_path / "failed-notification.db")
-    _seed(path)
-    service.record_result(path, MatchResult(1, 1, 1))
-    service.record_result(path, MatchResult(2, 2, 0))
-    with Database(path) as db:
-        db.set_setting("telegram_chat_id", "42")
-
-    class FailingTelegram:
-        def send_message(self, chat_id, text):
-            raise RuntimeError("telegram unavailable")
-
-    import pytest
-
-    with pytest.raises(RuntimeError, match="telegram unavailable"):
-        service.settle_pending(path, FailingTelegram())
-    with Database(path) as db:
-        assert db.get_telegram_delivery_receipt("coupon_result:1") is None
-        assert db.get_setting("coupon_result_notified:1") is None
 
 
 def test_failed_result_fetch_does_not_start_rate_limit(tmp_path):

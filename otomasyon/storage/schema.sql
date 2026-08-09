@@ -286,6 +286,34 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value  TEXT
 );
 
+-- Auditable acknowledgement returned by Telegram after a successful send.
+CREATE TABLE IF NOT EXISTS telegram_delivery_receipts (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind           TEXT NOT NULL,
+    notification_date TEXT NOT NULL,
+    dedupe_key     TEXT NOT NULL UNIQUE,
+    chat_id        TEXT NOT NULL,
+    message_id     INTEGER NOT NULL,
+    telegram_date  INTEGER,
+    sent_ts        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_delivery_kind_sent
+    ON telegram_delivery_receipts(kind, sent_ts);
+
+-- Durable lifecycle audit for each scheduler callback invocation.
+CREATE TABLE IF NOT EXISTS scheduler_callback_runs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    callback_name  TEXT NOT NULL,
+    started_ts     INTEGER NOT NULL,
+    ended_ts       INTEGER,
+    outcome        TEXT NOT NULL DEFAULT 'running'
+                   CHECK (outcome IN ('running', 'success', 'error')),
+    error          TEXT,
+    error_ts       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_scheduler_callback_name_started
+    ON scheduler_callback_runs(callback_name, started_ts);
+
 -- Final match results used to settle coupons (source: Mackolik archive, etc.).
 CREATE TABLE IF NOT EXISTS results (
     event_id     INTEGER PRIMARY KEY,

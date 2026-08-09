@@ -6,6 +6,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .storage import Database
+
 
 @dataclass(frozen=True)
 class ScheduledCallback:
@@ -27,6 +29,7 @@ class Scheduler:
         result_callback: Callable[[], object],
         context_callback: Callable[[], object],
         interval: float,
+        db_path: str | None = None,
     ) -> None:
         self.callbacks = (
             ScheduledCallback("history archive", history_callback),
@@ -38,13 +41,36 @@ class Scheduler:
             ScheduledCallback("context capture", context_callback),
         )
         self.interval = interval
+        self.db_path = db_path
 
     def run_cycle(self) -> None:
         for item in self.callbacks:
+            run_id = None
+            if self.db_path is not None:
+                with Database(self.db_path) as db:
+                    run_id = db.start_scheduler_callback(
+                        item.name, int(time.time())
+                    )
             try:
                 item.callback()
             except Exception as exc:
+                if run_id is not None:
+                    with Database(self.db_path) as db:
+                        db.finish_scheduler_callback(
+                            run_id,
+                            outcome="error",
+                            ended_ts=int(time.time()),
+                            error=str(exc),
+                        )
                 print(f"Scheduled callback failed ({item.name}): {exc}")
+            else:
+                if run_id is not None:
+                    with Database(self.db_path) as db:
+                        db.finish_scheduler_callback(
+                            run_id,
+                            outcome="success",
+                            ended_ts=int(time.time()),
+                        )
 
     def run(self) -> None:
         print("Scheduler çalışıyor. Durdurmak için Ctrl-C.")

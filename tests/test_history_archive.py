@@ -128,6 +128,10 @@ def test_archive_success_notification_is_once_and_retryable(tmp_path):
         pass
     with Database(path) as db:
         assert db.get_setting("history_archive_notified:2026-08-07") is None
+        assert (
+            db.get_telegram_delivery_receipt("history_archive:2026-08-07")
+            is None
+        )
 
     telegram = Telegram()
     notified = service.notify_completed_history_archives(

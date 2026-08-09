@@ -1088,6 +1088,148 @@ class Database:
         ).fetchone()
         return row["value"] if row else None
 
+    # -- Telegram delivery receipts ----------------------------------------
+    def save_telegram_delivery_receipt(
+        self,
+        *,
+        kind: str,
+        notification_date: str,
+        dedupe_key: str,
+        chat_id: int | str,
+        message_id: int,
+        telegram_date: int | None,
+        sent_ts: int,
+    ) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO telegram_delivery_receipts
+                (kind, notification_date, dedupe_key, chat_id, message_id,
+                 telegram_date, sent_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                kind,
+                notification_date,
+                dedupe_key,
+                str(chat_id),
+                int(message_id),
+                int(telegram_date) if telegram_date is not None else None,
+                int(sent_ts),
+            ),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def record_telegram_delivery(
+        self,
+        *,
+        kind: str,
+        notification_dates: Iterable[str],
+        chat_id: int | str,
+        message_id: int,
+        telegram_date: int | None,
+        sent_ts: int,
+        markers: dict[str, str],
+    ) -> None:
+        """Atomically persist delivery receipts and their dedupe markers."""
+        dates = list(notification_dates)
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT INTO telegram_delivery_receipts
+                    (kind, notification_date, dedupe_key, chat_id, message_id,
+                     telegram_date, sent_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        kind,
+                        notification_date,
+                        f"{kind}:{notification_date}",
+                        str(chat_id),
+                        int(message_id),
+                        (
+                            int(telegram_date)
+                            if telegram_date is not None
+                            else None
+                        ),
+                        int(sent_ts),
+                    )
+                    for notification_date in dates
+                ],
+            )
+            self.conn.executemany(
+                """
+                INSERT INTO app_settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                [
+                    (key, value)
+                    for key, value in markers.items()
+                ],
+            )
+
+    def get_telegram_delivery_receipt(self, dedupe_key: str) -> dict | None:
+        row = self.conn.execute(
+            """
+            SELECT id, kind, notification_date, dedupe_key, chat_id, message_id,
+                   telegram_date, sent_ts
+            FROM telegram_delivery_receipts
+            WHERE dedupe_key=?
+            """,
+            (dedupe_key,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    # -- scheduler callback audit ------------------------------------------
+    def start_scheduler_callback(self, callback_name: str, started_ts: int) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO scheduler_callback_runs (callback_name, started_ts)
+            VALUES (?, ?)
+            """,
+            (callback_name, int(started_ts)),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def finish_scheduler_callback(
+        self,
+        run_id: int,
+        *,
+        outcome: str,
+        ended_ts: int,
+        error: str | None = None,
+    ) -> None:
+        if outcome not in ("success", "error"):
+            raise ValueError(f"invalid scheduler callback outcome: {outcome}")
+        self.conn.execute(
+            """
+            UPDATE scheduler_callback_runs
+            SET ended_ts=?, outcome=?, error=?, error_ts=?
+            WHERE id=?
+            """,
+            (
+                int(ended_ts),
+                outcome,
+                error,
+                int(ended_ts) if error is not None else None,
+                int(run_id),
+            ),
+        )
+        self.conn.commit()
+
+    def scheduler_callback_runs(self) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT id, callback_name, started_ts, ended_ts, outcome, error,
+                   error_ts
+            FROM scheduler_callback_runs
+            ORDER BY id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     # -- reads --------------------------------------------------------------
     def count(self, table: str) -> int:
         # table name is internal/controlled, not user input

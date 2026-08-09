@@ -91,6 +91,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
         interval=args.interval,
+        db_path=args.db,
     )
     scheduler.run()
     return 0
