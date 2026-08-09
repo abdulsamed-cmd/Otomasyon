@@ -24,5 +24,18 @@ services:
     volumes:
       - otomasyon-data:/app/data
 
+  scheduler:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OTOMASYON_DB: /app/data/otomasyon.db
+    command: ["python", "-u", "-m", "otomasyon.cli", "scheduler"]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    volumes:
+      - otomasyon-data:/app/data
+
 volumes:
   otomasyon-data:

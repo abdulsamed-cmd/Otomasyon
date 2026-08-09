@@ -83,7 +83,7 @@ def test_poll_once_sends_reply_and_advances_offset():
     assert bot._offset == 11
 
 
-def test_poll_error_does_not_skip_result_or_context_callbacks(monkeypatch):
+def test_poll_error_does_not_stop_long_polling(monkeypatch):
     class FailingPollClient(FakeClient):
         def __init__(self):
             super().__init__()
@@ -95,70 +95,29 @@ def test_poll_error_does_not_skip_result_or_context_callbacks(monkeypatch):
                 raise TimeoutError("getUpdates timed out")
             raise KeyboardInterrupt
 
-    callback_calls = []
     bot = Bot(
         FailingPollClient(),
         "AbdulsamedErden",
         on_daily=lambda: "DAILY",
         on_surprise=lambda: "SURPRISE",
-        result_callback=lambda: callback_calls.append("result"),
-        context_callback=lambda: callback_calls.append("context"),
-        history_callback=lambda: callback_calls.append("history"),
-        model_status_callback=lambda: callback_calls.append("model"),
     )
     monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
 
     bot.run(poll_timeout=0)
 
-    assert callback_calls == ["model", "result", "context", "history"]
+    assert bot.client.polls == 2
 
 
-def test_keyboard_interrupt_stops_before_scheduled_callbacks():
+def test_keyboard_interrupt_stops_bot():
     class InterruptedPollClient(FakeClient):
         def get_updates(self, offset=None, timeout=25):
             raise KeyboardInterrupt
 
-    callback_calls = []
     bot = Bot(
         InterruptedPollClient(),
         "AbdulsamedErden",
         on_daily=lambda: "DAILY",
         on_surprise=lambda: "SURPRISE",
-        result_callback=lambda: callback_calls.append("result"),
-        context_callback=lambda: callback_calls.append("context"),
     )
 
     bot.run(poll_timeout=0)
-
-    assert callback_calls == []
-
-
-def test_result_failure_does_not_skip_context_or_history(monkeypatch):
-    class OneLoopClient(FakeClient):
-        def __init__(self):
-            super().__init__()
-            self.polls = 0
-
-        def get_updates(self, offset=None, timeout=25):
-            self.polls += 1
-            if self.polls == 1:
-                return []
-            raise KeyboardInterrupt
-
-    callback_calls = []
-
-    def failing_result():
-        raise RuntimeError("result source down")
-
-    bot = Bot(
-        OneLoopClient(),
-        "AbdulsamedErden",
-        on_daily=lambda: "DAILY",
-        on_surprise=lambda: "SURPRISE",
-        result_callback=failing_result,
-        context_callback=lambda: callback_calls.append("context"),
-        history_callback=lambda: callback_calls.append("history"),
-    )
-    monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
-    bot.run(poll_timeout=0)
-    assert callback_calls == ["context", "history"]

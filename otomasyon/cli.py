@@ -5,6 +5,7 @@ Usage:
     python -m otomasyon.cli coupon [--no-save]  # today's low-risk coupons
     python -m otomasyon.cli surprise            # surprise-lab report
     python -m otomasyon.cli bot                 # run the Telegram bot
+    python -m otomasyon.cli scheduler           # run scheduled background work
 """
 
 from __future__ import annotations
@@ -59,8 +60,7 @@ def cmd_bot(args: argparse.Namespace) -> int:
     client = TelegramClient()
     me = client.get_me()
     print(
-        f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}  "
-        f"| günlük proaktif gönderim saati: {config.DAILY_PUSH_HOUR}:00"
+        f"Bot bağlandı: @{me.get('username')}  | izinli kullanıcı: @{username}"
     )
 
     db = Database(args.db)
@@ -72,14 +72,25 @@ def cmd_bot(args: argparse.Namespace) -> int:
         on_lineup=lambda: service.lineup_risk_text(args.db),
         on_status=lambda: service.model_status_text(args.db),
         db=db,
-        push_hour=config.DAILY_PUSH_HOUR,
+    )
+    bot.run()
+    return 0
+
+
+def cmd_scheduler(args: argparse.Namespace) -> int:
+    from .scheduler import Scheduler
+    from .telegram import TelegramClient
+
+    client = TelegramClient()
+    scheduler = Scheduler(
+        model_status_callback=lambda: service.push_model_status(args.db, client),
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
         history_callback=lambda: service.archive_and_notify(args.db, client),
-        model_status_callback=lambda: service.push_model_status(args.db, client),
+        interval=args.interval,
     )
-    bot.run()
+    scheduler.run()
     return 0
 
 
@@ -566,6 +577,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_bot = sub.add_parser("bot", help="Run the single-user Telegram bot")
     p_bot.set_defaults(func=cmd_bot)
+
+    p_scheduler = sub.add_parser(
+        "scheduler", help="Run scheduled archive, notification and capture work"
+    )
+    p_scheduler.add_argument(
+        "--interval",
+        type=float,
+        default=config.SCHEDULER_INTERVAL_SECONDS,
+        help="Seconds between callback cycles",
+    )
+    p_scheduler.set_defaults(func=cmd_scheduler)
 
     p_push = sub.add_parser("push", help="Proactively push today's coupon now")
     p_push.add_argument(

@@ -34,7 +34,8 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 python3 -m otomasyon.cli fetch [--sample N]   # bülteni çek/sakla
 python3 -m otomasyon.cli coupon               # günün ana + alternatif kuponu
 python3 -m otomasyon.cli surprise             # sürpriz laboratuvarı
-python3 -m otomasyon.cli bot                  # Telegram botu (+ proaktif gönderim)
+python3 -m otomasyon.cli bot                  # Telegram komut/chat botu
+python3 -m otomasyon.cli scheduler            # planlı arşiv/bildirim/capture döngüsü
 python3 -m otomasyon.cli push [--force]       # günün kuponunu proaktif gönder
 python3 -m otomasyon.cli result --event ID --ft 2-1 [--ht 1-0]
 python3 -m otomasyon.cli settle [--notify]    # sonucu gelen kuponları kapat + bildir
@@ -85,11 +86,11 @@ Modern feed geçici olarak erişilemezse arşiv feed'i yedek olur. Uzatma/penalt
 maçlarında normal süre bahisleri arşiv feed'indeki 90 dakika skoru ile
 sonuçlandırılır; uzatma sonu görünen skor yanlışlıkla kullanılmaz.
 
-Telegram botu çalışırken sonuç taraması 15 dakikada bir yapılır. Sonuçlanan
+Bağımsız scheduler çalışırken sonuç taraması 15 dakikada bir yapılır. Sonuçlanan
 kupon kapatılır ve kullanıcıya otomatik bildirim gönderilir. Erteleme/iptal
 seçimleri `void` kabul edilir ve efektif oranları `1.00` sayılır.
 
-Bot ayrıca İstanbul saatiyle 04:00 sonrasında önceki günün **tüm** tamamlanmış
+Scheduler ayrıca İstanbul saatiyle 04:00 sonrasında önceki günün **tüm** tamamlanmış
 futbol maçlarını Mackolik arşivinden otomatik kaydeder. Son yedi gündeki
 başarısız günler yeniden denenir; kaynak hatası alan gün tamamlanmış sayılmaz.
 Bu tam günlük arşiv kupon dışındaki resmi maçları da model eğitimine ekler.
@@ -159,7 +160,7 @@ maç sonrası oluşan xG ayrıca `started`/`finished` bayraklarıyla saklandığ
 maç önü tahmine sızamaz. Katman rapor modundadır ve kupon motoruna bağlı
 değildir. İlk canlı ölçümde 757 iddaa maçının 426'sı eşleşmiş, incelenen 30
 yakın maçın 12'sinde maç başlamadan doğrulanmış kadro bulunmuştur.
-Telegram botu çalışırken bu capture en fazla 30 dakikada bir otomatik yenilenir;
+Scheduler çalışırken bu capture en fazla 30 dakikada bir otomatik yenilenir;
 poll döngüsünün sık çalışması veri kaynaklarına ek yük oluşturmaz.
 Oyuncu kimlikleri, pozisyonları ve mevcut piyasa değerleri ayrıca saklanır.
 Önceki resmi maçın ilk 11'iyle devamlılık karşılaştırması yapılır; beş veya
@@ -211,10 +212,10 @@ docker compose up -d --build
 curl http://localhost:8080/healthz
 ```
 
-Compose iki servis çalıştırır: Gunicorn dashboard ve Telegram/veri-toplama botu.
-İkisi `otomasyon-data` adlı kalıcı volume üzerindeki aynı WAL-mode SQLite
-veritabanını kullanır. Bot dashboard health check'i geçmeden başlamaz. Sunucu
-yeniden başladığında iki servis de `unless-stopped` politikasıyla geri gelir.
+Compose üç servis çalıştırır: Gunicorn dashboard, Telegram komut botu ve bağımsız
+scheduler. Üçü `otomasyon-data` adlı kalıcı volume üzerindeki aynı WAL-mode SQLite
+veritabanını kullanır. Bot ve scheduler dashboard health check'i geçmeden başlamaz.
+Sunucu yeniden başladığında servisler `unless-stopped` politikasıyla geri gelir.
 
 ## Kurulum ve çalıştırma
 

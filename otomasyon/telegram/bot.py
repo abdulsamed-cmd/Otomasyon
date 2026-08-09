@@ -14,9 +14,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import datetime
-
-from .. import config
 
 HELP = (
     "Merhaba! Komutlar:\n"
@@ -48,12 +45,6 @@ class Bot:
         on_lineup: Callable[[], str] | None = None,
         on_status: Callable[[], str] | None = None,
         db=None,
-        push_hour: int | None = None,
-        push_callback: Callable[[], object] | None = None,
-        result_callback: Callable[[], object] | None = None,
-        context_callback: Callable[[], object] | None = None,
-        history_callback: Callable[[], object] | None = None,
-        model_status_callback: Callable[[], object] | None = None,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -62,12 +53,6 @@ class Bot:
         self.on_lineup = on_lineup
         self.on_status = on_status
         self.db = db
-        self.push_hour = push_hour
-        self.push_callback = push_callback
-        self.result_callback = result_callback
-        self.context_callback = context_callback
-        self.history_callback = history_callback
-        self.model_status_callback = model_status_callback
         self._offset: int | None = None
 
     def _is_allowed(self, username: str | None) -> bool:
@@ -105,24 +90,6 @@ class Bot:
             return self.on_status()
         return HELP
 
-    def _maybe_scheduled_push(self) -> None:
-        """Proactively push the daily coupon at the configured local hour.
-
-        The push callback is responsible for de-duplicating per day, so calling
-        this every poll cycle is safe.
-        """
-        if self.push_hour is None or self.push_callback is None:
-            return
-        if datetime.now(tz=config.TIMEZONE).hour < self.push_hour:
-            return
-        try:
-            result = self.push_callback()
-            if result:
-                stamp = time.strftime("%H:%M:%S")
-                print(f"[{stamp}] proaktif günlük kupon gönderildi -> chat {result}")
-        except Exception as exc:  # pragma: no cover - resilience
-            print(f"Zamanlanmış gönderim hatası: {exc}")
-
     def poll_once(self, timeout: int = 25) -> int:
         updates = self.client.get_updates(offset=self._offset, timeout=timeout)
         sent = 0
@@ -143,54 +110,10 @@ class Bot:
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
         while True:
             try:
-                poll_failed = False
                 try:
                     self.poll_once(poll_timeout)
                 except Exception as exc:
-                    poll_failed = True
                     print(f"Bot hata (devam ediliyor): {exc}")
-
-                if self.model_status_callback is not None:
-                    try:
-                        result = self.model_status_callback()
-                        if result:
-                            print(
-                                f"Model sağlık raporu gönderildi -> chat {result}"
-                            )
-                    except Exception as exc:
-                        print(f"Model sağlık raporu hatası: {exc}")
-                self._maybe_scheduled_push()
-                if self.result_callback is not None:
-                    try:
-                        report = self.result_callback()
-                        if report and report.get("settled"):
-                            print(
-                                f"Sonuç taraması: {report['matched']} maç eşleşti, "
-                                f"{report['settled']} kupon kapandı ve bildirildi"
-                            )
-                    except Exception as exc:
-                        print(f"Sonuç taraması hatası: {exc}")
-                if self.context_callback is not None:
-                    try:
-                        report = self.context_callback()
-                        if report and not report.get("skipped"):
-                            print(
-                                f"Bağlamsal capture: {report['matched']} maç eşleşti, "
-                                f"{report['prematch_lineups']} maç önü kadro"
-                            )
-                    except Exception as exc:
-                        print(f"Bağlamsal capture hatası: {exc}")
-                if self.history_callback is not None:
-                    try:
-                        report = self.history_callback()
-                        if report and not report.get("skipped") and report.get("days"):
-                            print(
-                                f"Tarihsel arşiv: {len(report['days'])} gün, "
-                                f"{report['rows']} maç kaydedildi"
-                            )
-                    except Exception as exc:
-                        print(f"Tarihsel arşiv hatası: {exc}")
-                if poll_failed:
                     time.sleep(3)
             except KeyboardInterrupt:  # pragma: no cover
                 print("Bot durduruluyor.")
