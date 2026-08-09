@@ -503,3 +503,35 @@ def test_allow_list_rejection_is_audited_without_outbox(tmp_path):
         assert db.telegram_command_outbox(110) is None
         assert db.telegram_command_audit(110)[0]["outcome"] == "rejected"
     assert client.sent == []
+
+
+def test_render_failure_is_answered_instead_of_silently_dropped(tmp_path):
+    """An upstream outage must produce a reply, because silence looks like death."""
+    path = str(tmp_path / "render-failure.db")
+    client = PlannedTelegram([_update(310, "AbdulsamedErden", "bugün", chat_id=42)])
+    db = Database(path)
+    bot = Bot(
+        client,
+        "AbdulsamedErden",
+        on_daily=_raise_upstream,
+        on_surprise=lambda: "SURPRISE",
+        db=db,
+        clock=Clock(),
+        owner_id="render",
+    )
+
+    assert bot.poll_once(timeout=0) == 1
+    assert client.sent == [("42", bot_module.RENDER_FAILURE_REPLY)]
+    with Database(path) as check:
+        assert check.telegram_command_inbox(310)["status"] == "completed"
+        assert check.telegram_command_receipt(310)["message_id"]
+        stages = [
+            (row["stage"], row["outcome"])
+            for row in check.telegram_command_audit(310)
+        ]
+        assert ("render", "error") in stages
+        assert ("render", "fallback") in stages
+
+
+def _raise_upstream():
+    raise RuntimeError("iddaa bulletin unavailable")

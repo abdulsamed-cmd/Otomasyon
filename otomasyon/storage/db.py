@@ -1549,6 +1549,35 @@ class Database:
             )
             self._telegram_audit(update_id, "render", "error", now, error)
 
+    def enqueue_telegram_failure_reply(
+        self, update_id: int, chat_id: int | str, reply_text: str, now: int
+    ) -> None:
+        """Queue an honest failure notice, keeping the render error on record.
+
+        Silence is indistinguishable from a dead bot, so a command that cannot
+        be answered is still answered.
+        """
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO telegram_command_outbox
+                    (update_id, chat_id, reply_text, next_attempt_ts, created_ts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (int(update_id), str(chat_id), reply_text, int(now), int(now)),
+            )
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='outbox_ready',
+                    dispatched_ts=COALESCE(dispatched_ts, ?),
+                    rendered_ts=?
+                WHERE update_id=?
+                """,
+                (int(now), int(now), int(update_id)),
+            )
+            self._telegram_audit(update_id, "render", "fallback", now, None)
+
     def due_telegram_outbox(self, now: int) -> list[dict]:
         rows = self.conn.execute(
             """

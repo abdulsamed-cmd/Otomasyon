@@ -28,6 +28,13 @@ HELP = (
     "Not: Otomatik oynama yapılmaz; yalnızca bilgilendirme."
 )
 
+RENDER_FAILURE_REPLY = (
+    "Komutunuz alındı, ancak yanıt şu anda hazırlanamadı "
+    "(veri kaynağına ulaşılamıyor olabilir).\n"
+    "Birkaç dakika sonra tekrar yazabilirsiniz; sorun sürerse otomatik uyarı "
+    "gönderilecek."
+)
+
 
 def _normalize(text: str) -> str:
     return (text or "").strip().casefold()
@@ -181,8 +188,14 @@ class Bot:
             try:
                 reply = self._dispatch(text)
             except Exception as exc:
+                failed_at = int(self.clock())
                 self.db.fail_telegram_render(
-                    update_id, f"{type(exc).__name__}: {exc}", int(self.clock())
+                    update_id, f"{type(exc).__name__}: {exc}", failed_at
+                )
+                # An unanswered command looks exactly like a dead bot, so a
+                # failure is reported rather than swallowed.
+                self.db.enqueue_telegram_failure_reply(
+                    update_id, chat_id, RENDER_FAILURE_REPLY, failed_at
                 )
                 continue
             rendered_at = int(self.clock())
