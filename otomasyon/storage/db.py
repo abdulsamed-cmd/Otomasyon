@@ -594,6 +594,57 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def save_walk_forward_predictions(self, predictions: list[dict]) -> int:
+        before = self.conn.total_changes
+        self.conn.executemany(
+            """
+            INSERT OR IGNORE INTO walk_forward_predictions
+                (model_version, historical_source_id, prediction_date,
+                 cutoff_ts, market, outcome_name, odd, predicted_prob,
+                 market_fair, edge, actual_result, won, profit,
+                 xg_samples_home, xg_samples_away, created_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    item["model_version"],
+                    item["historical_source_id"],
+                    item["prediction_date"],
+                    item["cutoff_ts"],
+                    item["market"],
+                    item["outcome_name"],
+                    item["odd"],
+                    item["predicted_prob"],
+                    item["market_fair"],
+                    item["edge"],
+                    item["actual_result"],
+                    int(item["won"]),
+                    item["profit"],
+                    item["xg_samples_home"],
+                    item["xg_samples_away"],
+                    item["created_ts"],
+                )
+                for item in predictions
+            ],
+        )
+        self.conn.commit()
+        return self.conn.total_changes - before
+
+    def load_walk_forward_predictions(
+        self, model_version: str
+    ) -> list[dict]:
+        return [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT * FROM walk_forward_predictions
+                WHERE model_version=?
+                ORDER BY prediction_date, id
+                """,
+                (model_version,),
+            ).fetchall()
+        ]
+
     def historical_dates(self) -> set[str]:
         return {
             row["match_date"]

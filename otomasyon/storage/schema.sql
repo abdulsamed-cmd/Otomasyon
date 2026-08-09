@@ -166,6 +166,31 @@ CREATE TABLE IF NOT EXISTS model_predictions (
 CREATE INDEX IF NOT EXISTS idx_model_predictions_status
     ON model_predictions(model_version, result);
 
+CREATE TABLE IF NOT EXISTS walk_forward_predictions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_version     TEXT NOT NULL,
+    historical_source_id TEXT NOT NULL,
+    prediction_date   TEXT NOT NULL,
+    cutoff_ts         INTEGER NOT NULL,
+    market            TEXT NOT NULL,
+    outcome_name      TEXT NOT NULL,
+    odd               REAL NOT NULL,
+    predicted_prob    REAL NOT NULL,
+    market_fair       REAL NOT NULL,
+    edge              REAL NOT NULL,
+    actual_result     TEXT NOT NULL,
+    won               INTEGER NOT NULL,
+    profit            REAL NOT NULL,
+    xg_samples_home   INTEGER NOT NULL,
+    xg_samples_away   INTEGER NOT NULL,
+    created_ts        INTEGER NOT NULL,
+    UNIQUE (model_version, historical_source_id, market),
+    FOREIGN KEY (historical_source_id)
+        REFERENCES historical_matches(source_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_walk_forward_model_date
+    ON walk_forward_predictions(model_version, prediction_date);
+
 CREATE TABLE IF NOT EXISTS model_training_runs (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     run_date          TEXT NOT NULL,

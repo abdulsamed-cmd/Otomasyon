@@ -58,6 +58,8 @@ python3 -m otomasyon.cli xg-auto --force
 python3 -m otomasyon.cli model-refresh --force
 python3 -m otomasyon.cli shadow-predict
 python3 -m otomasyon.cli shadow-metrics
+python3 -m otomasyon.cli walk-forward --start 2025-10-01 --end 2026-03-31
+python3 -m otomasyon.cli walk-forward-metrics --min-edge 0.04
 python3 -m gunicorn --bind 0.0.0.0:8080 otomasyon.web:app
 ```
 
@@ -195,6 +197,18 @@ olarak yazılır ve sonuç/ROI/Brier ileriye dönük takip edilir.
 > Bu değerler gelecek fikstürlerde boş olup yalnız maçta oluşan toplam xG'den
 > sonuç sonrası hesaplanır. Pre-match tahmin gibi kullanılması yapay pozitif ROI
 > üretir. Canlı kupon ve backtest kodunda bu alan için tablo/komut bulunmaz.
+
+### Walk-forward tahmin arşivi
+
+`walk-forward`, her yerel gün için modeli yalnız önceki günlerin verisiyle
+yeniden kurar; aynı günün sonucu/xG'si tahmine giremez. Her xG kapsamlı resmi
+maç için tek Alt/Üst 2.5 tahmini, model/piyasa olasılığı, edge, oran, sonuç,
+profit ve Brier girdileri kalıcı saklanır.
+
+İlk sabit dönem (`2025-10-01..2026-03-31`) 108 günlük model ve 835 bağımsız
+tahmin üretmiştir. `%4+` edge alt kümesi 574 tahminde `-%7,6` ROI
+(`%95: -%15,4..+%0,3`) ve `0,2523` Brier vermiş; piyasa Brier'ı `0,2478` ile
+daha iyi kalmıştır. Bu nedenle `xg-ou-v1` canlı kapısı kapalıdır.
 
 ## Web dashboard
 

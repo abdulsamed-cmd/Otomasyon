@@ -549,6 +549,53 @@ def cmd_shadow_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_walk_forward(args: argparse.Namespace) -> int:
+    report = service.build_walk_forward_archive(
+        args.db,
+        start_date=args.start,
+        end_date=args.end,
+        model_version=args.model_version,
+    )
+    print("=== Walk-forward tahmin arşivi ===")
+    print(
+        f"Dönem {report['start_date']}..{report['end_date']} | "
+        f"{report['trained_days']} günlük model | "
+        f"{report['eligible_predictions']} uygun tahmin | "
+        f"{report['saved']} yeni kayıt"
+    )
+    return 0
+
+
+def cmd_walk_forward_metrics(args: argparse.Namespace) -> int:
+    report = service.walk_forward_metrics(
+        args.db,
+        model_version=args.model_version,
+        min_edge=args.min_edge,
+    )
+    print(f"=== Walk-forward: {report['model_version']} ===")
+    print(
+        f"Ham {report['all_predictions']}, edge≥%{report['min_edge']*100:.1f} "
+        f"{report['qualified_predictions']}, kazanan {report['wins']}"
+    )
+    print(
+        f"İsabet %{report['hit_rate']*100:.1f}, "
+        f"ort. oran {report['avg_odds']:.2f}, ROI %{report['roi']*100:.1f}, "
+        f"%95 %{report['roi_ci95'][0]*100:.1f}.."
+        f"%{report['roi_ci95'][1]*100:.1f}"
+    )
+    if report["model_brier"] is not None:
+        print(
+            f"Brier model {report['model_brier']:.4f} | "
+            f"piyasa {report['market_brier']:.4f}"
+        )
+    for outcome, item in report["outcomes"].items():
+        print(
+            f"  {outcome}: {item['predictions']} tahmin, "
+            f"{item['wins']} kazanan, ROI %{item['roi']*100:.1f}"
+        )
+    return 0
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     from .telegram import TelegramClient
 
@@ -772,6 +819,27 @@ def build_parser() -> argparse.ArgumentParser:
         "shadow-metrics", help="Report settled xG shadow predictions"
     )
     p_shadow_metrics.set_defaults(func=cmd_shadow_metrics)
+
+    p_walk = sub.add_parser(
+        "walk-forward", help="Build leakage-safe historical prediction archive"
+    )
+    p_walk.add_argument("--start", required=True)
+    p_walk.add_argument("--end", required=True)
+    p_walk.add_argument(
+        "--model-version", default=config.MODEL_WALK_FORWARD_VERSION
+    )
+    p_walk.set_defaults(func=cmd_walk_forward)
+
+    p_walk_metrics = sub.add_parser(
+        "walk-forward-metrics", help="Report walk-forward ROI and calibration"
+    )
+    p_walk_metrics.add_argument(
+        "--model-version", default=config.MODEL_WALK_FORWARD_VERSION
+    )
+    p_walk_metrics.add_argument(
+        "--min-edge", type=float, default=config.MODEL_MIN_EDGE
+    )
+    p_walk_metrics.set_defaults(func=cmd_walk_forward_metrics)
 
     return parser
 

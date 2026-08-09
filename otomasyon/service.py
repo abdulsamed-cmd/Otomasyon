@@ -512,6 +512,212 @@ def shadow_model_metrics(db_path: str) -> dict:
     }
 
 
+def build_walk_forward_archive(
+    db_path: str,
+    *,
+    start_date: str,
+    end_date: str,
+    model_version: str = config.MODEL_WALK_FORWARD_VERSION,
+) -> dict:
+    """Persist one leakage-safe O/U prediction per xG-covered historical match."""
+    from .eligibility import is_event_eligible
+    from .model import GoalModel
+
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+    with Database(db_path) as db:
+        history = db.load_historical_matches()
+        existing = {
+            row["historical_source_id"]
+            for row in db.conn.execute(
+                """
+                SELECT historical_source_id FROM walk_forward_predictions
+                WHERE model_version=? AND prediction_date BETWEEN ? AND ?
+                """,
+                (model_version, start_date, end_date),
+            ).fetchall()
+        }
+    targets_by_date: dict[str, list[dict]] = {}
+    for row in history:
+        if not (start_date <= row["match_date"] <= end_date):
+            continue
+        if row["source_id"] in existing:
+            continue
+        if row.get("xg_home") is None or row.get("xg_away") is None:
+            continue
+        if not all((row.get("odds_under25"), row.get("odds_over25"))):
+            continue
+        if not is_event_eligible(
+            row.get("competition") or "", row["home"], row["away"]
+        ):
+            continue
+        targets_by_date.setdefault(row["match_date"], []).append(row)
+
+    saved = eligible = 0
+    trained_days = 0
+    created_ts = int(time.time())
+    for day in sorted(targets_by_date):
+        day_value = date.fromisoformat(day)
+        cutoff = int(
+            datetime.combine(
+                day_value, datetime.min.time(), tzinfo=config.TIMEZONE
+            ).timestamp()
+        )
+        model = GoalModel(history, cutoff, use_xg=True)
+        trained_days += 1
+        predictions = []
+        for row in targets_by_date[day]:
+            prediction = model.predict(
+                row["home"], row["away"], row.get("competition")
+            )
+            if (
+                prediction.xg_samples_home < 3
+                or prediction.xg_samples_away < 3
+            ):
+                continue
+            odds = [row["odds_under25"], row["odds_over25"]]
+            fair = probability.fair_probs(odds)
+            options = [
+                (
+                    prediction.probs["Alt 2.5"] - fair[0],
+                    "Alt",
+                    odds[0],
+                    prediction.probs["Alt 2.5"],
+                    fair[0],
+                ),
+                (
+                    prediction.probs["Üst 2.5"] - fair[1],
+                    "Üst",
+                    odds[1],
+                    prediction.probs["Üst 2.5"],
+                    fair[1],
+                ),
+            ]
+            edge, outcome, odd, predicted_prob, market_fair = max(options)
+            actual = (
+                "Alt"
+                if row["ft_home"] + row["ft_away"] < 2.5
+                else "Üst"
+            )
+            won = outcome == actual
+            predictions.append(
+                {
+                    "model_version": model_version,
+                    "historical_source_id": row["source_id"],
+                    "prediction_date": day,
+                    "cutoff_ts": cutoff,
+                    "market": "OU25",
+                    "outcome_name": outcome,
+                    "odd": odd,
+                    "predicted_prob": predicted_prob,
+                    "market_fair": market_fair,
+                    "edge": edge,
+                    "actual_result": actual,
+                    "won": won,
+                    "profit": odd - 1.0 if won else -1.0,
+                    "xg_samples_home": prediction.xg_samples_home,
+                    "xg_samples_away": prediction.xg_samples_away,
+                    "created_ts": created_ts,
+                }
+            )
+        eligible += len(predictions)
+        if predictions:
+            with Database(db_path) as db:
+                saved += db.save_walk_forward_predictions(predictions)
+    return {
+        "model_version": model_version,
+        "start_date": start_date,
+        "end_date": end_date,
+        "target_days": len(targets_by_date),
+        "trained_days": trained_days,
+        "eligible_predictions": eligible,
+        "saved": saved,
+        "already_present": len(existing),
+    }
+
+
+def walk_forward_metrics(
+    db_path: str,
+    *,
+    model_version: str = config.MODEL_WALK_FORWARD_VERSION,
+    min_edge: float = config.MODEL_MIN_EDGE,
+) -> dict:
+    with Database(db_path) as db:
+        all_rows = db.load_walk_forward_predictions(model_version)
+    rows = [row for row in all_rows if row["edge"] >= min_edge]
+    profits = [row["profit"] for row in rows]
+    roi = statistics.mean(profits) if profits else 0.0
+    margin = (
+        1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
+        if len(profits) > 1
+        else 0.0
+    )
+    model_brier = [
+        (row["predicted_prob"] - row["won"]) ** 2 for row in rows
+    ]
+    market_brier = [
+        (row["market_fair"] - row["won"]) ** 2 for row in rows
+    ]
+    outcomes = {}
+    for outcome in ("Alt", "Üst"):
+        selected = [row for row in rows if row["outcome_name"] == outcome]
+        outcome_profits = [row["profit"] for row in selected]
+        outcomes[outcome] = {
+            "predictions": len(selected),
+            "wins": sum(row["won"] for row in selected),
+            "roi": (
+                statistics.mean(outcome_profits) if outcome_profits else 0.0
+            ),
+        }
+    calibration = []
+    for lower in (0.5, 0.6, 0.7, 0.8, 0.9):
+        upper = lower + 0.1
+        selected = [
+            row
+            for row in rows
+            if lower <= row["predicted_prob"] < upper
+        ]
+        if selected:
+            calibration.append(
+                {
+                    "lower": lower,
+                    "upper": upper,
+                    "predictions": len(selected),
+                    "avg_probability": statistics.mean(
+                        row["predicted_prob"] for row in selected
+                    ),
+                    "actual_rate": statistics.mean(
+                        row["won"] for row in selected
+                    ),
+                }
+            )
+    return {
+        "model_version": model_version,
+        "all_predictions": len(all_rows),
+        "qualified_predictions": len(rows),
+        "wins": sum(row["won"] for row in rows),
+        "hit_rate": (
+            sum(row["won"] for row in rows) / len(rows) if rows else 0.0
+        ),
+        "avg_odds": (
+            statistics.mean(row["odd"] for row in rows) if rows else 0.0
+        ),
+        "roi": roi,
+        "roi_ci95": (roi - margin, roi + margin),
+        "model_brier": (
+            statistics.mean(model_brier) if model_brier else None
+        ),
+        "market_brier": (
+            statistics.mean(market_brier) if market_brier else None
+        ),
+        "outcomes": outcomes,
+        "calibration": calibration,
+        "min_edge": min_edge,
+    }
+
+
 def settle_surprise_reports(db_path: str) -> int:
     """Settle candidate outcomes and theoretical system returns."""
     settled_reports = 0
@@ -909,6 +1115,7 @@ def archive_and_notify(
 def model_status_text(db_path: str) -> str:
     processes = metrics_by_kind(db_path)
     shadow = shadow_model_metrics(db_path)
+    walk_forward = walk_forward_metrics(db_path)
     goals = surprise_category_metrics(db_path)["goals_6plus"]
     training = latest_model_training(db_path)
     lines = ["09:45 MODEL / PERFORMANS DURUMU"]
@@ -955,6 +1162,23 @@ def model_status_text(db_path: str) -> str:
         )
     lines.extend(
         [
+            "",
+            (
+                f"Walk-forward ({walk_forward['model_version']}) — "
+                f"{walk_forward['qualified_predictions']}/"
+                f"{walk_forward['all_predictions']} edge uygun"
+            ),
+            (
+                f"ROI {walk_forward['roi']*100:+.1f}% "
+                f"[95% {walk_forward['roi_ci95'][0]*100:+.1f}%.."
+                f"{walk_forward['roi_ci95'][1]*100:+.1f}%]"
+            ),
+            (
+                f"Brier model/piyasa: {walk_forward['model_brier']:.4f}/"
+                f"{walk_forward['market_brier']:.4f}"
+                if walk_forward["model_brier"] is not None
+                else "Brier model/piyasa: veri yok"
+            ),
             "",
             f"xG gölge ({shadow['model_version']}) — {shadow['predictions']}/"
             f"{config.MODEL_GATE_MIN_BETS} sonuç",

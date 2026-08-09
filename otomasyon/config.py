@@ -122,6 +122,7 @@ MODEL_XG_BLEND = 0.90
 # after sufficient out-of-sample evidence.
 MODEL_LIVE_ENABLED = False
 MODEL_SHADOW_VERSION = "xg-ou-v1"
+MODEL_WALK_FORWARD_VERSION = "xg-ou-v1-wf"
 MODEL_GATE_MIN_BETS = 200
 MODEL_GATE_MIN_ROI_CI_LOW = 0.0
 
