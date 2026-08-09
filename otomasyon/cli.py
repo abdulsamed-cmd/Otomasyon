@@ -83,11 +83,13 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
 
     client = TelegramClient()
     scheduler = Scheduler(
+        history_callback=lambda: service.archive_and_notify(args.db, client),
+        xg_sync_callback=lambda: service.auto_xg_sync(args.db),
+        model_refresh_callback=lambda: service.auto_model_refresh(args.db),
         model_status_callback=lambda: service.push_model_status(args.db, client),
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
-        history_callback=lambda: service.archive_and_notify(args.db, client),
         interval=args.interval,
     )
     scheduler.run()
@@ -493,6 +495,33 @@ def cmd_xg_backfill(args: argparse.Namespace) -> int:
     return 0 if not report["errors"] else 1
 
 
+def cmd_xg_auto(args: argparse.Namespace) -> int:
+    report = service.auto_xg_sync(args.db, force=args.force)
+    if report["skipped"]:
+        print(f"xG senkronizasyonu atlandı: {report['reason']}")
+        return 0
+    print(
+        f"xG senkronizasyonu: {report['fetched']} kaynak maç, "
+        f"{report['linked']} tarihsel eşleşme"
+    )
+    for error in report["errors"]:
+        print(f"  {error['scope']}: {error['error']}")
+    return 0 if not report["errors"] else 1
+
+
+def cmd_model_refresh(args: argparse.Namespace) -> int:
+    report = service.auto_model_refresh(args.db, force=args.force)
+    if report["skipped"]:
+        print(f"Model eğitimi atlandı: {report['reason']}")
+        return 0
+    run = report["run"]
+    print(
+        f"Model eğitildi: {run['model_version']} | "
+        f"{run['history_matches']} maç | {run['xg_matches']} xG maçı"
+    )
+    return 0
+
+
 def cmd_shadow_predict(args: argparse.Namespace) -> int:
     report = service.capture_shadow_predictions(args.db)
     print(
@@ -720,6 +749,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_xg.add_argument("--season", type=int, action="append", required=True)
     p_xg.add_argument("--league", action="append")
     p_xg.set_defaults(func=cmd_xg_backfill)
+
+    p_xg_auto = sub.add_parser(
+        "xg-auto", help="Sync current xG after nightly archive"
+    )
+    p_xg_auto.add_argument("--force", action="store_true")
+    p_xg_auto.set_defaults(func=cmd_xg_auto)
+
+    p_model_refresh = sub.add_parser(
+        "model-refresh", help="Train and record the daily model snapshot"
+    )
+    p_model_refresh.add_argument("--force", action="store_true")
+    p_model_refresh.set_defaults(func=cmd_model_refresh)
 
     p_shadow = sub.add_parser(
         "shadow-predict", help="Capture report-only xG O/U predictions"

@@ -852,7 +852,26 @@ def model_status_text(db_path: str) -> str:
     processes = metrics_by_kind(db_path)
     shadow = shadow_model_metrics(db_path)
     goals = surprise_category_metrics(db_path)["goals_6plus"]
+    training = latest_model_training(db_path)
     lines = ["09:45 MODEL / PERFORMANS DURUMU"]
+    if training:
+        trained = datetime.fromtimestamp(
+            training["trained_ts"], tz=config.TIMEZONE
+        ).strftime("%d.%m %H:%M")
+        lines.extend(
+            [
+                (
+                    f"Son eğitim: {trained} · "
+                    f"{training['model_version']} · {training['status']}"
+                ),
+                (
+                    f"Eğitim verisi: {training['history_matches']} maç · "
+                    f"{training['xg_matches']} xG maçı"
+                ),
+            ]
+        )
+    else:
+        lines.append("Son eğitim: henüz kayıt yok")
     labels = {
         "daily_main": "Ana kupon",
         "daily_alt": "Alternatif",
@@ -1195,6 +1214,131 @@ def backfill_understat_xg(
         ),
         "errors": errors,
     }
+
+
+def auto_xg_sync(
+    db_path: str,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    client=None,
+) -> dict:
+    """Sync recent Understat seasons after the previous day is archived."""
+    now = now or datetime.now(tz=config.TIMEZONE)
+    now_ts = int(now.timestamp())
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    with Database(db_path) as db:
+        if db.get_setting(f"history_archive:{yesterday}") is None:
+            return {"skipped": True, "reason": "archive_not_ready", "errors": []}
+        if not force and db.get_setting("last_xg_sync_date") == today:
+            return {"skipped": True, "reason": "already_synced", "errors": []}
+        last_poll = int(db.get_setting("last_xg_sync_poll_ts") or 0)
+        if (
+            not force
+            and now_ts - last_poll < config.XG_SYNC_POLL_INTERVAL_SECONDS
+        ):
+            return {"skipped": True, "reason": "rate_limited", "errors": []}
+        db.set_setting("last_xg_sync_poll_ts", str(now_ts))
+    report = backfill_understat_xg(
+        db_path,
+        seasons=[now.year - 1, now.year],
+        client=client,
+    )
+    report["skipped"] = False
+    if not report["errors"]:
+        with Database(db_path) as db:
+            db.set_setting("last_xg_sync_date", today)
+            db.set_setting("last_xg_sync_linked", str(report["linked"]))
+    return report
+
+
+def auto_model_refresh(
+    db_path: str,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+) -> dict:
+    """Fit the daily model after archive+xG sync and persist training metadata."""
+    from .model import GoalModel
+
+    now = now or datetime.now(tz=config.TIMEZONE)
+    now_ts = int(now.timestamp())
+    today = now.strftime("%Y-%m-%d")
+    with Database(db_path) as db:
+        if not force and db.get_setting("last_xg_sync_date") != today:
+            return {"skipped": True, "reason": "xg_not_ready"}
+        existing = db.conn.execute(
+            """
+            SELECT * FROM model_training_runs
+            WHERE run_date=? AND model_version=?
+            """,
+            (today, config.MODEL_SHADOW_VERSION),
+        ).fetchone()
+        if existing is not None and not force:
+            return {
+                "skipped": True,
+                "reason": "already_trained",
+                "run": dict(existing),
+            }
+        history = db.load_historical_matches(before_ts=now_ts)
+    model = GoalModel(history, now_ts, use_xg=True)
+    xg_matches = sum(
+        row.get("xg_home") is not None and row.get("xg_away") is not None
+        for row in model.history
+    )
+    values = (
+        today,
+        config.MODEL_SHADOW_VERSION,
+        now_ts,
+        now_ts,
+        len(model.history),
+        xg_matches,
+        len(model.stats),
+        "ready",
+    )
+    with Database(db_path) as db:
+        db.conn.execute(
+            """
+            INSERT INTO model_training_runs
+                (run_date, model_version, trained_ts, cutoff_ts,
+                 history_matches, xg_matches, team_scopes, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_date, model_version) DO UPDATE SET
+                trained_ts=excluded.trained_ts,
+                cutoff_ts=excluded.cutoff_ts,
+                history_matches=excluded.history_matches,
+                xg_matches=excluded.xg_matches,
+                team_scopes=excluded.team_scopes,
+                status=excluded.status
+            """,
+            values,
+        )
+        db.set_setting("last_model_training_date", today)
+        db.conn.commit()
+    return {
+        "skipped": False,
+        "run": {
+            "run_date": today,
+            "model_version": config.MODEL_SHADOW_VERSION,
+            "trained_ts": now_ts,
+            "history_matches": len(model.history),
+            "xg_matches": xg_matches,
+            "team_scopes": len(model.stats),
+            "status": "ready",
+        },
+    }
+
+
+def latest_model_training(db_path: str) -> dict | None:
+    with Database(db_path) as db:
+        row = db.conn.execute(
+            """
+            SELECT * FROM model_training_runs
+            ORDER BY trained_ts DESC LIMIT 1
+            """
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def lineup_risk_report(

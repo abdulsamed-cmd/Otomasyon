@@ -54,6 +54,8 @@ python3 -m otomasyon.cli fotmob-context --detail-window 2 --detail-limit 30
 python3 -m otomasyon.cli fotmob-lineup-backfill --per-team 1
 python3 -m otomasyon.cli lineup-risk --high-rotation 5
 python3 -m otomasyon.cli xg-backfill --season 2024 --season 2025
+python3 -m otomasyon.cli xg-auto --force
+python3 -m otomasyon.cli model-refresh --force
 python3 -m otomasyon.cli shadow-predict
 python3 -m otomasyon.cli shadow-metrics
 python3 -m gunicorn --bind 0.0.0.0:8080 otomasyon.web:app
@@ -106,6 +108,13 @@ gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Bri
 6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.
 İzinli kullanıcı aynı raporu istediği anda Telegram'da `durum` yazarak alabilir;
 bu istek planlı günlük bildirimin deduplication durumunu değiştirmez.
+
+Gece scheduler sırası sabittir: tam sonuç arşivi → güncel/önceki sezon
+Understat xG senkronizasyonu → xG/Mackolik eşleştirme → günlük model eğitimi →
+09:45 sağlık raporu → 10:00 kupon. Eğitim ancak önceki gün arşivi ve o günkü
+xG senkronizasyonu başarılıysa `model_training_runs` tablosuna `ready` olarak
+kaydedilir. Sağlık raporu son eğitim zamanı ile kullanılan toplam/xG maç
+sayılarını gösterir.
 
 Bu endpoint'ler belgesiz/harici veri kaynaklarıdır. Kişisel ve düşük frekanslı
 kullanım hedeflenir; ticari kullanım veya yeniden dağıtım öncesinde veri

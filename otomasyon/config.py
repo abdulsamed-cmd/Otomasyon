@@ -101,6 +101,7 @@ HISTORY_ARCHIVE_POLL_INTERVAL_SECONDS = 60 * 60
 HISTORY_ARCHIVE_RETRY_DAYS = 7
 MODEL_STATUS_PUSH_HOUR = 9
 MODEL_STATUS_PUSH_MINUTE = 45
+XG_SYNC_POLL_INTERVAL_SECONDS = 60 * 60
 # Only used when a Mackolik record lacks ``iddaaCode``. Exact event-id matching
 # is always preferred.
 RESULT_FUZZY_THRESHOLD = 0.84

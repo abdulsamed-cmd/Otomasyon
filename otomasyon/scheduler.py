@@ -19,19 +19,23 @@ class Scheduler:
     def __init__(
         self,
         *,
+        history_callback: Callable[[], object],
+        xg_sync_callback: Callable[[], object],
+        model_refresh_callback: Callable[[], object],
         model_status_callback: Callable[[], object],
         push_callback: Callable[[], object],
         result_callback: Callable[[], object],
         context_callback: Callable[[], object],
-        history_callback: Callable[[], object],
         interval: float,
     ) -> None:
         self.callbacks = (
+            ScheduledCallback("history archive", history_callback),
+            ScheduledCallback("xG sync", xg_sync_callback),
+            ScheduledCallback("model refresh", model_refresh_callback),
             ScheduledCallback("model status", model_status_callback),
             ScheduledCallback("daily push", push_callback),
             ScheduledCallback("result polling", result_callback),
             ScheduledCallback("context capture", context_callback),
-            ScheduledCallback("history archive", history_callback),
         )
         self.interval = interval
 

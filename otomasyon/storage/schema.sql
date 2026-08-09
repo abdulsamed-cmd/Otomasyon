@@ -166,6 +166,19 @@ CREATE TABLE IF NOT EXISTS model_predictions (
 CREATE INDEX IF NOT EXISTS idx_model_predictions_status
     ON model_predictions(model_version, result);
 
+CREATE TABLE IF NOT EXISTS model_training_runs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date          TEXT NOT NULL,
+    model_version     TEXT NOT NULL,
+    trained_ts        INTEGER NOT NULL,
+    cutoff_ts         INTEGER NOT NULL,
+    history_matches   INTEGER NOT NULL,
+    xg_matches        INTEGER NOT NULL,
+    team_scopes       INTEGER NOT NULL,
+    status            TEXT NOT NULL,
+    UNIQUE (run_date, model_version)
+);
+
 CREATE TABLE IF NOT EXISTS clubelo_ratings (
     rating_date  TEXT NOT NULL,
     club_key     TEXT NOT NULL,

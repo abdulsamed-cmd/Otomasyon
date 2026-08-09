@@ -4,11 +4,13 @@ from otomasyon.scheduler import Scheduler
 
 def _scheduler(calls, **overrides):
     callbacks = {
+        "history_callback": lambda: calls.append("history"),
+        "xg_sync_callback": lambda: calls.append("xg"),
+        "model_refresh_callback": lambda: calls.append("refresh"),
         "model_status_callback": lambda: calls.append("model"),
         "push_callback": lambda: calls.append("push"),
         "result_callback": lambda: calls.append("result"),
         "context_callback": lambda: calls.append("context"),
-        "history_callback": lambda: calls.append("history"),
     }
     callbacks.update(overrides)
     return Scheduler(**callbacks, interval=0)
@@ -23,15 +25,17 @@ def test_callback_failure_is_isolated():
 
     _scheduler(calls, result_callback=failing_result).run_cycle()
 
-    assert calls == ["model", "push", "result", "context", "history"]
+    assert calls == [
+        "history", "xg", "refresh", "model", "push", "result", "context"
+    ]
 
 
-def test_model_status_runs_before_daily_push():
+def test_training_pipeline_runs_before_model_status_and_daily_push():
     calls = []
 
     _scheduler(calls).run_cycle()
 
-    assert calls[:2] == ["model", "push"]
+    assert calls[:5] == ["history", "xg", "refresh", "model", "push"]
 
 
 def test_continuous_loop_stops_cleanly_on_interrupt(monkeypatch):
@@ -49,7 +53,7 @@ def test_continuous_loop_stops_cleanly_on_interrupt(monkeypatch):
     _scheduler(calls).run()
 
     assert calls == [
-        "model", "push", "result", "context", "history",
-        "model", "push", "result", "context", "history",
+        "history", "xg", "refresh", "model", "push", "result", "context",
+        "history", "xg", "refresh", "model", "push", "result", "context",
     ]
     assert sleeps == 2

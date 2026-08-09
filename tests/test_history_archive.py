@@ -49,6 +49,18 @@ class Telegram:
         self.sent.append((chat_id, text))
 
 
+class Understat:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.calls = []
+
+    def fetch_league(self, league, season):
+        self.calls.append((league, season))
+        if self.fail:
+            raise RuntimeError("xg source unavailable")
+        return []
+
+
 def test_nightly_archive_saves_all_recent_days_and_rate_limits(tmp_path):
     path = str(tmp_path / "archive.db")
     now = datetime(2026, 8, 8, 5, tzinfo=config.TIMEZONE)
@@ -139,3 +151,40 @@ def test_model_status_push_runs_once_after_0945(tmp_path):
 
     next_day_late = datetime(2026, 8, 9, 11, 0, tzinfo=config.TIMEZONE)
     assert service.push_model_status(path, telegram, now=next_day_late) is None
+
+
+def test_xg_sync_and_model_refresh_follow_completed_archive(tmp_path):
+    path = str(tmp_path / "pipeline.db")
+    now = datetime(2026, 8, 9, 5, tzinfo=config.TIMEZONE)
+    service.auto_history_archive(
+        path, now=now, force=True, result_client=ArchiveClient()
+    )
+    sync = service.auto_xg_sync(
+        path, now=now, force=True, client=Understat()
+    )
+    assert sync["skipped"] is False
+    assert sync["errors"] == []
+    refresh = service.auto_model_refresh(path, now=now)
+    assert refresh["skipped"] is False
+    assert refresh["run"]["history_matches"] > 0
+    assert service.auto_model_refresh(path, now=now)["reason"] == "already_trained"
+    status = service.model_status_text(path)
+    assert "Son eğitim:" in status
+    assert "Eğitim verisi:" in status
+
+
+def test_failed_xg_sync_does_not_unlock_model_training(tmp_path):
+    path = str(tmp_path / "pipeline.db")
+    now = datetime(2026, 8, 9, 5, tzinfo=config.TIMEZONE)
+    service.auto_history_archive(
+        path, now=now, force=True, result_client=ArchiveClient()
+    )
+    sync = service.auto_xg_sync(
+        path, now=now, force=True, client=Understat(fail=True)
+    )
+    assert sync["errors"]
+    with Database(path) as db:
+        assert db.get_setting("last_xg_sync_date") is None
+    refresh = service.auto_model_refresh(path, now=now)
+    assert refresh["skipped"] is True
+    assert refresh["reason"] == "xg_not_ready"
