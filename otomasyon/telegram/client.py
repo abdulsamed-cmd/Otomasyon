@@ -154,11 +154,14 @@ class TelegramClient:
         if offset is not None:
             params["offset"] = offset
         url = f"{API_ROOT}/bot{self.token}/getUpdates"
-        read_timeout = poll_timeout + POLL_READ_MARGIN_SECONDS
+        # A separate connect timeout stops a slow dial from consuming the whole
+        # budget; the read timeout only has to outlast the long poll itself.
+        timeouts = (
+            config.TELEGRAM_CONNECT_TIMEOUT_SECONDS,
+            poll_timeout + POLL_READ_MARGIN_SECONDS,
+        )
         try:
-            response = self.poll_session.get(
-                url, params=params, timeout=read_timeout
-            )
+            response = self.poll_session.get(url, params=params, timeout=timeouts)
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             # The socket is unusable or suspect; a fresh one avoids stalling

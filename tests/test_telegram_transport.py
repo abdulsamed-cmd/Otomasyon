@@ -77,10 +77,32 @@ def test_poll_read_timeout_exceeds_the_long_poll_deadline():
     client.get_updates(offset=5)
 
     call = session.calls[0]
+    connect_timeout, read_timeout = call["timeout"]
     assert call["params"]["timeout"] == config.TELEGRAM_POLL_TIMEOUT_SECONDS
-    assert call["timeout"] == (
+    assert read_timeout == (
         config.TELEGRAM_POLL_TIMEOUT_SECONDS + POLL_READ_MARGIN_SECONDS
     )
+    assert connect_timeout == config.TELEGRAM_CONNECT_TIMEOUT_SECONDS
+
+
+def test_one_poll_attempt_is_bounded_in_total_time():
+    """Internal retries restart the clock, turning a stall into minutes.
+
+    A single attempt must be capped by connect + read, because the bot redials
+    itself after a failure and a longer attempt only hides incoming messages.
+    """
+    assert config.TELEGRAM_POLL_CONNECT_RETRIES == 0
+    worst_case = (
+        config.TELEGRAM_CONNECT_TIMEOUT_SECONDS
+        + config.TELEGRAM_POLL_TIMEOUT_SECONDS
+        + POLL_READ_MARGIN_SECONDS
+    )
+    assert worst_case <= 60
+
+    poll_adapter = TelegramClient(token="t").poll_session.get_adapter(
+        "https://api.telegram.org"
+    )
+    assert poll_adapter.max_retries.total == 0
 
 
 def test_long_poll_is_short_enough_to_bound_a_silent_drop():

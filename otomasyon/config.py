@@ -96,9 +96,13 @@ TELEGRAM_POLL_RETRY_BASE_SECONDS = 0.5
 TELEGRAM_POLL_RETRY_MAX_SECONDS = 5.0
 # Consecutive poll failures before the connection pool is rebuilt outright.
 TELEGRAM_POLL_RESET_AFTER_FAILURES = 3
-# A pooled connection closed by the far end is redialled transparently. Only
-# polling may retry; a retried send could deliver the same message twice.
-TELEGRAM_POLL_CONNECT_RETRIES = 2
+# Transport-level retries are deliberately disabled. Each internal retry
+# restarts the timeout from zero, so a stalled poll multiplies into minutes of
+# invisibility. The bot redials itself after every failure instead, which keeps
+# a single attempt bounded by the timeouts below.
+TELEGRAM_POLL_CONNECT_RETRIES = 0
+# Connecting must fail fast; only the long poll itself is allowed to be slow.
+TELEGRAM_CONNECT_TIMEOUT_SECONDS = 10
 # Poll traces are diagnostic; keep a bounded window.
 TELEGRAM_POLL_LOG_RETENTION_SECONDS = 3 * 24 * 60 * 60
 
