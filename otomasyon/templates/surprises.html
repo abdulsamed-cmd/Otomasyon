@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Sürpriz laboratuvarı · Otomasyon{% endblock %}
+{% block content %}
+<section class="private-header">
+  <div>
+    <p class="eyebrow">ŞİFRELİ · AYRI SÜREÇ</p>
+    <h1>Sürpriz arşivi</h1>
+    <p>Yüksek risk adayları ve teorik sistem sonuçları günlük kuponlardan ayrıdır.</p>
+  </div>
+  <span class="secure-badge">Korumalı</span>
+</section>
+<div class="coupon-list">
+{% for report in reports %}
+  <a class="coupon-row" href="{{ url_for('surprise_detail', report_id=report.id) }}">
+    <div><b>{{ report.period_key }}</b><span>Haftalık rapor</span></div>
+    <div><b>{{ report.candidate_count }}</b><span>Aday</span></div>
+    <div><b>{{ report.system_count }}</b><span>Sistem maçı</span></div>
+    <span class="status {{ report.status }}">{{ 'Sonuçlandı' if report.status == 'settled' else 'Bekliyor' }}</span>
+    <i>→</i>
+  </a>
+{% else %}
+  <p class="empty-card">Henüz kaydedilmiş sürpriz raporu yok.</p>
+{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Özel giriş · Otomasyon{% endblock %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-panel">
+    <p class="eyebrow">YALNIZCA YETKİLİ KULLANICI</p>
+    <h1>Kupon kasası</h1>
+    <p>Telegram’da paylaşılan güncel ve geçmiş kupon detaylarına erişin.</p>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    {% if not configured %}
+      <div class="alert">Sunucuda <code>DASHBOARD_PASSWORD</code> tanımlanmalıdır.</div>
+    {% endif %}
+    <form method="post" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="password">Dashboard şifresi</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required {% if not configured %}disabled{% endif %}>
+      <button type="submit" {% if not configured %}disabled{% endif %}>Güvenli giriş</button>
+    </form>
+    <small>Oturum çerezi HttpOnly ve SameSite korumalıdır.</small>
+  </div>
+</section>
+{% endblock %}

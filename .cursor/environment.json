@@ -1,0 +1,4 @@
+{
+  "name": "Otomasyon",
+  "install": "python3 -m pip install --user -r requirements-dev.txt"
+}

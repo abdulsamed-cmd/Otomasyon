@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Performans · Otomasyon{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">KANITA DAYALI KUPON TAKİBİ</p>
+    <h1>Sonuçları açık,<br><span>kuponları özel.</span></h1>
+    <p class="hero-copy">
+      Burada yalnız geçmiş performans ve toplu istatistikler gösterilir.
+      Maçlar ve seçimler şifreli alanda kalır.
+    </p>
+  </div>
+  <div class="privacy-card">
+    <span class="lock">●</span>
+    <strong>Kupon gizliliği aktif</strong>
+    <p>Takım, maç ve seçim detayları bu sayfaya gönderilmez.</p>
+  </div>
+</section>
+
+<section>
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">BAĞIMSIZ SÜREÇLER</p>
+      <h2>Performans kapıları</h2>
+    </div>
+    <span class="live-badge"><i></i> Sonuç verisi</span>
+  </div>
+  <div class="metric-grid">
+    {% for kind, item in metrics.items() %}
+    <article class="metric-card">
+      <div class="metric-top">
+        <span>{{ kind_label(kind) }}</span>
+        <span class="gate {{ 'passed' if item.gate_passed else 'waiting' }}">
+          {{ 'Geçti' if item.gate_passed else 'Kanıt bekliyor' }}
+        </span>
+      </div>
+      <strong class="metric-number">{{ item.coupons }}</strong>
+      <span class="metric-label">sonuçlanan kupon / {{ item.minimum_coupons }} gerekli</span>
+      <div class="metric-row">
+        <div><b>%{{ "%.1f"|format(item.hit_rate * 100) }}</b><span>İsabet</span></div>
+        <div>
+          {% if item.system_size is defined %}
+            <b>{{ item.system_size }}'li</b><span>İzlenen sistem</span>
+          {% else %}
+            <b>{{ "%.2f"|format(item.avg_odds) }}</b><span>Ort. oran</span>
+          {% endif %}
+        </div>
+        <div>
+          {% if item.avg_clv is not none %}
+            <b class="{{ 'positive' if item.avg_clv > 0 else 'negative' }}">%{{ "%+.1f"|format(item.avg_clv * 100) }}</b><span>CLV · {{ item.clv_samples }}</span>
+          {% else %}
+            <b>—</b><span>CLV bekliyor</span>
+          {% endif %}
+        </div>
+        <div><b class="{{ 'positive' if item.roi > 0 else 'negative' }}">%{{ "%+.1f"|format(item.roi * 100) }}</b><span>ROI</span></div>
+      </div>
+      <div class="progress"><i style="width: {{ [item.coupons / item.minimum_coupons * 100, 100]|min }}%"></i></div>
+    </article>
+    {% endfor %}
+  </div>
+  <article class="shadow-card">
+    <div>
+      <p class="eyebrow">GÖLGE MODEL · CANLI ETKİSİ KAPALI</p>
+      <h3>{{ shadow.model_version }}</h3>
+      <p>Yalnız xG geçmişi yeterli takımların Alt/Üst 2.5 tahminleri ileriye dönük izlenir.</p>
+    </div>
+    <div class="shadow-stat"><b>{{ shadow.predictions }}</b><span>Sonuçlanan</span></div>
+    <div class="shadow-stat"><b>%{{ "%+.1f"|format(shadow.roi * 100) }}</b><span>ROI</span></div>
+    <div class="shadow-stat"><b>{{ "%.3f"|format(shadow.brier) if shadow.brier is not none else "—" }}</b><span>Brier</span></div>
+    <span class="gate {{ 'passed' if shadow.gate_passed else 'waiting' }}">{{ 'Geçti' if shadow.gate_passed else 'Kanıt bekliyor' }}</span>
+  </article>
+  <div class="goal-metrics">
+    {% for category, item in goal_metrics.items() %}
+    <article>
+      <span>6+ Gol</span>
+      <b>{{ item.candidates }}</b>
+      <small>sonuçlanan aday</small>
+      <div><em>%{{ "%.1f"|format(item.hit_rate * 100) }} isabet</em><em>ROI %{{ "%+.1f"|format(item.roi * 100) }}</em></div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="history">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">DETAYSIZ GEÇMİŞ</p>
+      <h2>Son sonuçlar</h2>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tarih</th><th>Süreç</th><th>Seçim</th><th>Toplam oran</th><th>Sonuç</th></tr></thead>
+      <tbody>
+      {% for coupon in recent %}
+        <tr>
+          <td>{{ coupon.for_date }}</td>
+          <td>{{ kind_label(coupon.kind) }}</td>
+          <td>{{ coupon.leg_count }} ayak</td>
+          <td>{{ "%.2f"|format(coupon.total_odds) }}</td>
+          <td><span class="status {{ coupon.status }}">{{ {'won':'Tuttu','lost':'Yattı','void':'İade'}.get(coupon.status, coupon.status) }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">Henüz sonuçlanmış kupon bulunmuyor.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
