@@ -105,6 +105,43 @@ Başarılı gece arşivi Telegram'da tarih, kaynak maç sayısı, toplam tarihse
 veri ve yeniden denenecek gün sayısıyla bir kez bildirilir. Gönderim başarısız
 olursa tarih bildirilmiş sayılmaz ve sonraki bot döngüsünde yeniden denenir.
 
+### Telegram bağlantı dayanıklılığı
+
+Uzun yoklama (long polling), Telegram'ın gönderecek mesajı yokken TCP
+bağlantısını açık tutar. NAT ağ geçitleri bu boşta bağlantıları sessizce
+düşürür: istemci okuma zaman aşımı dolana kadar bekler ve mesajlar bu süre
+boyunca Telegram tarafında görülmeden kuyrukta durur. Bu, botun "çalışıyor
+ama cevap vermiyor" görünmesinin başlıca nedenidir.
+
+Bu yüzden yoklama katmanı şu değişmezlere dayanır:
+
+- Yoklama süresi `TELEGRAM_POLL_TIMEOUT_SECONDS` ile sınırlıdır; düşen bir
+  bağlantı mesajları en fazla bu süre kadar gizleyebilir.
+- Soketler TCP keepalive sondaları gönderir, böylece kopan bağlantı okuma
+  zaman aşımından çok önce fark edilir.
+- Başarısız yoklama havuzdaki soketi emekliye ayırır; sonraki deneme yeni
+  bağlantı kurar ve saniyenin altında yeniden denenir.
+- `telegram_bot_runtime.last_poll_ts` yalnızca tamamlanan bir gidiş-dönüşte
+  ilerler, bu yüzden "ayakta ama Telegram'a ulaşamıyor" durumu ölçülebilir.
+- Scheduler bu damgayı izler; bot `TELEGRAM_WATCHDOG_STALE_SECONDS` boyunca
+  sessiz kalırsa kullanıcıya bir kez uyarı, döndüğünde bir kez de düzelme
+  bildirimi gönderilir.
+- Kilit süresi kısadır: ani çöken bir süreç kilidini bırakamaz, bu yüzden
+  devralma dakikalar değil saniyeler alır.
+- Yanıt üretilemezse (kaynak erişilemez) komut sessizce düşürülmez; hata
+  bildiren bir yanıt kuyruğa alınır. Sessizlik, ölü bir bottan ayırt edilemez.
+
+Süreç ölümüne karşı koruma süreç dışındadır: Compose'da `restart:
+unless-stopped`, elle çalıştırmada ise botu bir yeniden başlatma döngüsüne
+sarın:
+
+```bash
+until python3 -u -m otomasyon.cli bot; do sleep 2; done
+```
+
+Kasıtlı durdurma (Ctrl-C) yeniden başlatma sayılmaz; yalnızca beklenmedik
+sonlanmalar yeniden başlatılır.
+
 Her gün `09:45`te, `10:00` kuponundan önce ayrı bir model sağlık bildirimi
 gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
 6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.

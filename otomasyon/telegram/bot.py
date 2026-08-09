@@ -330,6 +330,7 @@ class Bot:
         """
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
         backoff = config.TELEGRAM_POLL_RETRY_BASE_SECONDS
+        reported: str | None = None
         try:
             while True:
                 try:
@@ -338,14 +339,22 @@ class Bot:
                     print("Bot durduruluyor.")
                     raise
                 except Exception as exc:
+                    # A persistent condition is reported once so that repeated
+                    # retries cannot bury a different, newer failure.
+                    message = str(exc)
+                    if message != reported:
+                        print(f"Bot yoklama hatası (yeniden deneniyor): {exc}")
+                        reported = message
                     # The user is already waiting, so recover in under a second
                     # rather than adding a fixed penalty to every hiccup.
-                    print(f"Bot yoklama hatası (yeniden deneniyor): {exc}")
                     self.sleep(backoff)
                     backoff = min(
                         backoff * 2, config.TELEGRAM_POLL_RETRY_MAX_SECONDS
                     )
                 else:
+                    if reported is not None:
+                        print("Bot yoklaması normale döndü.")
+                        reported = None
                     backoff = config.TELEGRAM_POLL_RETRY_BASE_SECONDS
         finally:
             self.db.release_telegram_bot_lease(
