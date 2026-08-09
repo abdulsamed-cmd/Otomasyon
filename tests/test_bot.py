@@ -111,14 +111,16 @@ def test_poll_error_does_not_stop_long_polling(monkeypatch):
     )
     monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
 
-    bot.run(poll_timeout=0)
+    with pytest.raises(KeyboardInterrupt):
+        bot.run(poll_timeout=0)
     runtime = bot.db.telegram_bot_runtime()
     assert runtime["lease_expires_ts"] <= runtime["heartbeat_ts"]
 
     assert bot.client.polls == 2
 
 
-def test_keyboard_interrupt_stops_bot():
+def test_keyboard_interrupt_stops_bot_without_a_restart():
+    """A deliberate stop must reach the supervisor instead of looking like a crash."""
     class InterruptedPollClient(FakeClient):
         def get_updates(self, offset=None, timeout=25):
             raise KeyboardInterrupt
@@ -130,7 +132,11 @@ def test_keyboard_interrupt_stops_bot():
         on_surprise=lambda: "SURPRISE",
     )
 
-    bot.run(poll_timeout=0)
+    with pytest.raises(KeyboardInterrupt):
+        bot.run(poll_timeout=0)
+
+    runtime = bot.db.telegram_bot_runtime()
+    assert runtime["lease_expires_ts"] <= runtime["heartbeat_ts"]
 
 
 class Clock:
@@ -476,7 +482,8 @@ def test_poll_recovery_retries_within_a_second(tmp_path):
         owner_id="backoff",
         sleep=delays.append,
     )
-    bot.run(poll_timeout=0)
+    with pytest.raises(KeyboardInterrupt):
+        bot.run(poll_timeout=0)
 
     assert delays[0] <= 1.0
     assert delays == sorted(delays)

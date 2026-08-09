@@ -164,10 +164,38 @@ def test_supervisor_restarts_when_the_bot_returns_unexpectedly():
 
 
 def test_supervisor_stops_on_keyboard_interrupt():
+    """Ctrl-C must stop the bot for good, not trigger an endless restart loop."""
+    starts = []
+
     def start():
+        starts.append(1)
         raise KeyboardInterrupt
 
     assert supervise(start, sleep=lambda _s: None) == 0
+    assert len(starts) == 1
+
+
+def test_interrupted_bot_run_reaches_the_supervisor():
+    """The bot's own stop path must surface as an interrupt, not a clean return."""
+    from otomasyon.storage import Database
+    from otomasyon.telegram.bot import Bot
+
+    class Interrupted:
+        def get_updates(self, offset=None, timeout=None):
+            raise KeyboardInterrupt
+
+        def send_message(self, chat_id, text):  # pragma: no cover - unused
+            raise AssertionError("no reply expected")
+
+    bot = Bot(
+        Interrupted(),
+        "AbdulsamedErden",
+        on_daily=lambda: "DAILY",
+        on_surprise=lambda: "SURPRISE",
+        db=Database(":memory:"),
+    )
+
+    assert supervise(lambda: bot.run(poll_timeout=0), sleep=lambda _s: None) == 0
 
 
 def test_supervisor_backoff_resets_after_a_healthy_run():

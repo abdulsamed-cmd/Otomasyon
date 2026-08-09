@@ -310,6 +310,11 @@ class Bot:
         return sent
 
     def run(self, poll_timeout: int | None = None) -> None:
+        """Poll until interrupted.
+
+        A deliberate stop propagates as ``KeyboardInterrupt`` so a supervisor
+        can tell it apart from a crash and refrain from restarting the bot.
+        """
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
         backoff = config.TELEGRAM_POLL_RETRY_BASE_SECONDS
         try:
@@ -318,7 +323,7 @@ class Bot:
                     self.poll_once(poll_timeout)
                 except KeyboardInterrupt:
                     print("Bot durduruluyor.")
-                    return
+                    raise
                 except Exception as exc:
                     # The user is already waiting, so recover in under a second
                     # rather than adding a fixed penalty to every hiccup.
