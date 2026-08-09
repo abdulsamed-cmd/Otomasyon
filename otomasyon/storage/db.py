@@ -1727,6 +1727,18 @@ class Database:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def release_telegram_bot_lease(self, owner_id: str, now: int) -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_bot_runtime
+                SET heartbeat_ts=?, lease_expires_ts=?
+                WHERE singleton_id=1 AND owner_id=?
+                """,
+                (int(now), int(now), owner_id),
+            )
+        return cur.rowcount == 1
+
     def telegram_command_inbox(self, update_id: int) -> dict | None:
         row = self.conn.execute(
             "SELECT * FROM telegram_command_inbox WHERE update_id=?",

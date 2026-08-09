@@ -111,6 +111,8 @@ def test_poll_error_does_not_stop_long_polling(monkeypatch):
     monkeypatch.setattr(bot_module.time, "sleep", lambda _seconds: None)
 
     bot.run(poll_timeout=0)
+    runtime = bot.db.telegram_bot_runtime()
+    assert runtime["lease_expires_ts"] <= runtime["heartbeat_ts"]
 
     assert bot.client.polls == 2
 

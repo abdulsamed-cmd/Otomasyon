@@ -278,16 +278,21 @@ class Bot:
 
     def run(self, poll_timeout: int = 25) -> None:
         print("Bot çalışıyor (long polling). Durdurmak için Ctrl-C.")
-        while True:
-            try:
+        try:
+            while True:
                 try:
-                    self.poll_once(poll_timeout)
-                except Exception as exc:
+                    try:
+                        self.poll_once(poll_timeout)
+                    except Exception as exc:
+                        print(f"Bot hata (devam ediliyor): {exc}")
+                        time.sleep(3)
+                except KeyboardInterrupt:  # pragma: no cover
+                    print("Bot durduruluyor.")
+                    return
+                except Exception as exc:  # pragma: no cover - resilience loop
                     print(f"Bot hata (devam ediliyor): {exc}")
                     time.sleep(3)
-            except KeyboardInterrupt:  # pragma: no cover
-                print("Bot durduruluyor.")
-                return
-            except Exception as exc:  # pragma: no cover - resilience loop
-                print(f"Bot hata (devam ediliyor): {exc}")
-                time.sleep(3)
+        finally:
+            self.db.release_telegram_bot_lease(
+                self.owner_id, int(self.clock())
+            )
