@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import json
 import sqlite3
 import time
 from datetime import datetime
@@ -31,112 +30,14 @@ class Database:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        # region agent log
-        before_columns = [
-            row[1]
-            for row in self.conn.execute(
-                "PRAGMA table_info(telegram_delivery_receipts)"
-            )
-        ]
-        open("/opt/cursor/logs/debug.log", "a").write(
-            json.dumps(
-                {
-                    "hypothesisId": "A",
-                    "location": "otomasyon/storage/db.py:33",
-                    "message": "receipt schema before initialization",
-                    "data": {"columns": before_columns},
-                    "timestamp": int(time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-        # endregion
         self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        # region agent log
         after_columns = [
             row[1]
             for row in self.conn.execute(
                 "PRAGMA table_info(telegram_delivery_receipts)"
             )
         ]
-        open("/opt/cursor/logs/debug.log", "a").write(
-            json.dumps(
-                {
-                    "hypothesisId": "A",
-                    "location": "otomasyon/storage/db.py:55",
-                    "message": "receipt schema after initialization",
-                    "data": {"columns": after_columns},
-                    "timestamp": int(time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-        # endregion
-        # region agent log
-        migration_evidence = self.conn.execute(
-            """
-            SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN dedupe_key = kind || ':' ||
-                            substr(dedupe_key, length(kind) + 2)
-                            THEN 1 ELSE 0 END) AS derivable
-            FROM telegram_delivery_receipts
-            """
-        ).fetchone()
-        open("/opt/cursor/logs/debug.log", "a").write(
-            json.dumps(
-                {
-                    "hypothesisId": "B,C",
-                    "location": "otomasyon/storage/db.py:74",
-                    "message": "legacy receipt migration evidence",
-                    "data": {
-                        "rows": migration_evidence["total"],
-                        "derivable": migration_evidence["derivable"],
-                        "indexes": [
-                            row[1]
-                            for row in self.conn.execute(
-                                "PRAGMA index_list(telegram_delivery_receipts)"
-                            )
-                        ],
-                    },
-                    "timestamp": int(time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-        # endregion
         self._migrate_telegram_delivery_receipts(after_columns)
-        # region agent log
-        migrated_columns = [
-            row[1]
-            for row in self.conn.execute(
-                "PRAGMA table_info(telegram_delivery_receipts)"
-            )
-        ]
-        migrated_rows = self.conn.execute(
-            """
-            SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN notification_date != '' THEN 1 ELSE 0 END)
-                       AS backfilled
-            FROM telegram_delivery_receipts
-            """
-        ).fetchone()
-        open("/opt/cursor/logs/debug.log", "a").write(
-            json.dumps(
-                {
-                    "hypothesisId": "A,B,C",
-                    "location": "otomasyon/storage/db.py:102",
-                    "message": "receipt schema after migration",
-                    "data": {
-                        "columns": migrated_columns,
-                        "rows": migrated_rows["total"],
-                        "backfilled": migrated_rows["backfilled"],
-                    },
-                    "timestamp": int(time.time() * 1000),
-                }
-            )
-            + "\n"
-        )
-        # endregion
         self.conn.commit()
 
     def _migrate_telegram_delivery_receipts(self, columns: list[str]) -> None:
