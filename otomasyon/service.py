@@ -7,6 +7,8 @@ ready-to-send text.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import math
 import statistics
@@ -20,6 +22,22 @@ from .storage import Database
 
 _CACHE_TTL = 300  # seconds
 _cache: dict = {"ts": 0.0, "events": None, "competitions": None}
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    with open("/opt/cursor/logs/debug.log", "a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "hypothesisId": hypothesis_id,
+                    "location": location,
+                    "message": message,
+                    "data": data,
+                    "timestamp": int(time.time() * 1000),
+                }
+            )
+            + "\n"
+        )
 
 
 def fetch_normalized_events(client: IddaaClient | None = None):
@@ -81,6 +99,9 @@ def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
     call repeatedly. Returns the chat id sent to, or None if skipped.
     """
     today = datetime.now(tz=config.TIMEZONE).strftime("%Y-%m-%d")
+    # region agent log
+    _debug_log("A", "service.py:push_daily", "daily gate inputs", {"today": today, "force": force})
+    # endregion
     with Database(db_path) as db:
         chat_id = db.get_setting("telegram_chat_id")
         if not chat_id:
@@ -89,7 +110,10 @@ def push_daily(db_path: str, client, *, force: bool = False) -> str | None:
             return None
 
     text = daily_text(db_path)
-    client.send_message(chat_id, text)
+    response = client.send_message(chat_id, text)
+    # region agent log
+    _debug_log("B,C", "service.py:push_daily", "daily send returned", {"response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
+    # endregion
     with Database(db_path) as db:
         db.set_setting("last_push_date", today)
     return chat_id
@@ -124,7 +148,10 @@ def settle_pending(db_path: str, client=None, *, notify: bool = True) -> list[di
     if notify and client and chat_id:
         for item in decided:
             text = formatting.format_settlement(item["coupon"], item["settlement"])
-            client.send_message(chat_id, text)
+            response = client.send_message(chat_id, text)
+            # region agent log
+            _debug_log("B,D", "service.py:settle_pending", "coupon result send returned", {"coupon_id": item["coupon"]["id"], "response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
+            # endregion
     return decided
 
 
@@ -820,7 +847,10 @@ def notify_completed_history_archives(
             "Yeni veriler bir sonraki model eğitiminde kullanılacak.",
         ]
     )
-    telegram_client.send_message(chat_id, text)
+    response = telegram_client.send_message(chat_id, text)
+    # region agent log
+    _debug_log("B,C", "service.py:notify_completed_history_archives", "archive send returned", {"date_count": len(dates), "response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
+    # endregion
     with Database(db_path) as db:
         for day in dates:
             db.set_setting(f"history_archive_notified:{day}", str(int(now.timestamp())))
@@ -954,7 +984,10 @@ def push_model_status(
             return None
         if not force and db.get_setting("last_model_status_date") == today:
             return None
-    telegram_client.send_message(chat_id, model_status_text(db_path))
+    response = telegram_client.send_message(chat_id, model_status_text(db_path))
+    # region agent log
+    _debug_log("B,C", "service.py:push_model_status", "model status send returned", {"response_type": type(response).__name__, "has_message_id": isinstance(response, dict) and "message_id" in response})
+    # endregion
     with Database(db_path) as db:
         db.set_setting("last_model_status_date", today)
     return chat_id
