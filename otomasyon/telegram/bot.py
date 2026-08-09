@@ -13,7 +13,10 @@ network access.
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Callable
+
+from ..storage import Database
 
 HELP = (
     "Merhaba! Komutlar:\n"
@@ -34,6 +37,10 @@ def _chat_id_of(update: dict) -> int | None:
     return (msg.get("chat") or {}).get("id")
 
 
+class BotLeaseError(RuntimeError):
+    pass
+
+
 class Bot:
     def __init__(
         self,
@@ -45,6 +52,12 @@ class Bot:
         on_lineup: Callable[[], str] | None = None,
         on_status: Callable[[], str] | None = None,
         db=None,
+        clock: Callable[[], float] = time.time,
+        owner_id: str | None = None,
+        lease_seconds: int = 300,
+        max_send_attempts: int = 4,
+        retry_base_seconds: int = 2,
+        retry_max_seconds: int = 30,
     ) -> None:
         self.client = client
         self.allowed = (allowed_username or "").lstrip("@")
@@ -52,8 +65,15 @@ class Bot:
         self.on_surprise = on_surprise
         self.on_lineup = on_lineup
         self.on_status = on_status
-        self.db = db
-        self._offset: int | None = None
+        self.db = db or Database(":memory:")
+        self.clock = clock
+        self.owner_id = owner_id or uuid.uuid4().hex
+        self.lease_seconds = lease_seconds
+        self.max_send_attempts = max_send_attempts
+        self.retry_base_seconds = retry_base_seconds
+        self.retry_max_seconds = retry_max_seconds
+        self._recovered = False
+        self._offset = self.db.telegram_poll_offset()
 
     def _is_allowed(self, username: str | None) -> bool:
         return bool(self.allowed) and bool(username) and (
@@ -90,20 +110,170 @@ class Bot:
             return self.on_status()
         return HELP
 
-    def poll_once(self, timeout: int = 25) -> int:
-        updates = self.client.get_updates(offset=self._offset, timeout=timeout)
+    def _command_name(self, text: str) -> str:
+        if text.startswith("/start") or any(
+            word in text for word in ("yardım", "yardim", "help")
+        ):
+            return "help"
+        if "bugün" in text or "bugun" in text:
+            return "daily"
+        if any(
+            word in text
+            for word in ("sürpriz", "surpriz", "süpriz", "supriz", "suprise")
+        ):
+            return "surprise"
+        if "kadro" in text and self.on_lineup is not None:
+            return "lineup"
+        if "durum" in text and self.on_status is not None:
+            return "status"
+        return "help"
+
+    def _renew_lease(self, now: int) -> None:
+        if not self.db.acquire_telegram_bot_lease(
+            self.owner_id, now, self.lease_seconds
+        ):
+            runtime = self.db.telegram_bot_runtime() or {}
+            raise BotLeaseError(
+                f"Telegram bot lease is held by {runtime.get('owner_id', 'unknown')}"
+            )
+        if not self._recovered:
+            self.db.recover_telegram_commands(now)
+            self._recovered = True
+
+    def _process_inbox(self) -> None:
+        for row in self.db.pending_telegram_inbox():
+            update_id = row["update_id"]
+            if not self.db.begin_telegram_command(update_id):
+                continue
+            update = row["payload"]
+            msg = update.get("message") or update.get("edited_message")
+            now = int(self.clock())
+            if not msg:
+                self.db.reject_telegram_command(
+                    update_id, now, "unsupported update without message"
+                )
+                continue
+            username = (msg.get("from") or {}).get("username")
+            if not self._is_allowed(username):
+                self.db.reject_telegram_command(
+                    update_id, now, "username not on allow-list"
+                )
+                continue
+            chat_id = (msg.get("chat") or {}).get("id")
+            if chat_id is None:
+                self.db.reject_telegram_command(update_id, now, "missing chat id")
+                continue
+
+            text = _normalize(msg.get("text", ""))
+            command = self._command_name(text)
+            self.db.authorize_telegram_command(
+                update_id, chat_id, command, now
+            )
+            self.db.audit_telegram_command(
+                update_id, "dispatch", "started", now, command
+            )
+            try:
+                reply = self._dispatch(text)
+            except Exception as exc:
+                self.db.fail_telegram_render(
+                    update_id, f"{type(exc).__name__}: {exc}", int(self.clock())
+                )
+                continue
+            rendered_at = int(self.clock())
+            self.db.audit_telegram_command(
+                update_id, "dispatch", "completed", rendered_at, command
+            )
+            self.db.enqueue_telegram_reply(
+                update_id, chat_id, reply, rendered_at
+            )
+
+    def _retry_delay(self, attempts: int, retry_after: int | None) -> int:
+        exponential = min(
+            self.retry_base_seconds * (2 ** max(0, attempts - 1)),
+            self.retry_max_seconds,
+        )
+        if retry_after is None:
+            return exponential
+        return min(max(exponential, int(retry_after)), self.retry_max_seconds)
+
+    def _process_outbox(self) -> int:
         sent = 0
-        for u in updates:
-            self._offset = u["update_id"] + 1
-            reply = self.handle_update(u)
-            if reply:
-                chat_id = _chat_id_of(u)
-                if chat_id is not None:
-                    self.client.send_message(chat_id, reply)
-                    sent += 1
-                    stamp = time.strftime("%H:%M:%S")
-                    incoming = ((u.get("message") or {}).get("text") or "").strip()
-                    print(f"[{stamp}] chat {chat_id} <- '{incoming}' | yanıt gönderildi")
+        now = int(self.clock())
+        for candidate in self.db.due_telegram_outbox(now):
+            row = self.db.begin_telegram_send(candidate["id"], now)
+            if row is None:
+                continue
+            try:
+                response = self.client.send_message(
+                    row["chat_id"], row["reply_text"]
+                )
+            except Exception as exc:
+                failed_at = int(self.clock())
+                detail = f"{type(exc).__name__}: {exc}"
+                if getattr(exc, "ambiguous", True):
+                    self.db.mark_telegram_send_ambiguous(
+                        row["id"], detail, failed_at
+                    )
+                elif getattr(exc, "retryable", False):
+                    if row["attempts"] >= self.max_send_attempts:
+                        self.db.fail_telegram_send(row["id"], detail, failed_at)
+                    else:
+                        delay = self._retry_delay(
+                            row["attempts"], getattr(exc, "retry_after", None)
+                        )
+                        self.db.retry_telegram_send(
+                            row["id"], detail, failed_at + delay, failed_at
+                        )
+                else:
+                    self.db.fail_telegram_send(row["id"], detail, failed_at)
+                continue
+
+            message_id = (
+                response.get("message_id") if isinstance(response, dict) else None
+            )
+            response_chat_id = (
+                (response.get("chat") or {}).get("id")
+                if isinstance(response, dict)
+                else None
+            )
+            if message_id is None or response_chat_id is None:
+                self.db.mark_telegram_send_ambiguous(
+                    row["id"], "sendMessage acknowledgement missing ids", int(self.clock())
+                )
+                continue
+            self.db.complete_telegram_send(
+                row["id"],
+                message_id=message_id,
+                chat_id=response_chat_id,
+                telegram_date=response.get("date"),
+                now=int(self.clock()),
+            )
+            sent += 1
+            stamp = time.strftime("%H:%M:%S")
+            print(
+                f"[{stamp}] update {row['update_id']} -> chat "
+                f"{response_chat_id} | yanıt gönderildi"
+            )
+        return sent
+
+    def poll_once(self, timeout: int = 25) -> int:
+        now = int(self.clock())
+        self._renew_lease(now)
+
+        # Drain durable work before a potentially long getUpdates request.
+        self._process_inbox()
+        sent = self._process_outbox()
+
+        self._renew_lease(int(self.clock()))
+        updates = self.client.get_updates(
+            offset=self.db.telegram_poll_offset(), timeout=timeout
+        )
+        self._offset = self.db.persist_telegram_updates(
+            updates, int(self.clock())
+        )
+        self._process_inbox()
+        sent += self._process_outbox()
+        self._renew_lease(int(self.clock()))
         return sent
 
     def run(self, poll_timeout: int = 25) -> None:

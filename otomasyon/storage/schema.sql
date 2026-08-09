@@ -351,6 +351,98 @@ CREATE TABLE IF NOT EXISTS telegram_delivery_receipts (
 CREATE INDEX IF NOT EXISTS idx_telegram_delivery_kind_sent
     ON telegram_delivery_receipts(kind, sent_ts);
 
+-- Telegram command transport is intentionally independent from scheduler
+-- delivery receipts.  Updates are acknowledged to Telegram only after the raw
+-- payload is durable, then rendered replies move through a persistent outbox.
+CREATE TABLE IF NOT EXISTS telegram_command_inbox (
+    update_id       INTEGER PRIMARY KEY,
+    payload_json    TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN (
+                        'pending', 'processing', 'outbox_ready', 'completed',
+                        'render_error'
+                    )),
+    authorized      INTEGER,
+    command         TEXT,
+    chat_id         TEXT,
+    received_ts     INTEGER NOT NULL,
+    authorized_ts   INTEGER,
+    dispatched_ts   INTEGER,
+    rendered_ts     INTEGER,
+    completed_ts    INTEGER,
+    error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_command_inbox_status
+    ON telegram_command_inbox(status, update_id);
+
+CREATE TABLE IF NOT EXISTS telegram_command_outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    update_id       INTEGER NOT NULL UNIQUE,
+    chat_id         TEXT NOT NULL,
+    reply_text      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN (
+                        'pending', 'sending', 'retry_wait', 'sent',
+                        'ambiguous', 'failed'
+                    )),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_ts INTEGER NOT NULL,
+    created_ts      INTEGER NOT NULL,
+    first_attempt_ts INTEGER,
+    last_attempt_ts INTEGER,
+    sent_ts         INTEGER,
+    error           TEXT,
+    FOREIGN KEY (update_id)
+        REFERENCES telegram_command_inbox(update_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_command_outbox_due
+    ON telegram_command_outbox(status, next_attempt_ts, update_id);
+
+CREATE TABLE IF NOT EXISTS telegram_command_reply_receipts (
+    update_id       INTEGER PRIMARY KEY,
+    outbox_id       INTEGER NOT NULL UNIQUE,
+    chat_id         TEXT NOT NULL,
+    message_id      INTEGER NOT NULL,
+    telegram_date   INTEGER,
+    received_ts     INTEGER NOT NULL,
+    authorized_ts   INTEGER NOT NULL,
+    dispatched_ts   INTEGER NOT NULL,
+    rendered_ts     INTEGER NOT NULL,
+    first_attempt_ts INTEGER NOT NULL,
+    acknowledged_ts INTEGER NOT NULL,
+    sent_ts         INTEGER NOT NULL,
+    FOREIGN KEY (update_id)
+        REFERENCES telegram_command_inbox(update_id) ON DELETE CASCADE,
+    FOREIGN KEY (outbox_id)
+        REFERENCES telegram_command_outbox(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS telegram_command_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    update_id       INTEGER NOT NULL,
+    stage           TEXT NOT NULL
+                    CHECK (stage IN (
+                        'authorization', 'dispatch', 'render', 'send'
+                    )),
+    outcome         TEXT NOT NULL,
+    occurred_ts     INTEGER NOT NULL,
+    detail          TEXT,
+    FOREIGN KEY (update_id)
+        REFERENCES telegram_command_inbox(update_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_command_audit_update
+    ON telegram_command_audit(update_id, id);
+
+-- One bot process may own the polling lease.  Heartbeats make stale ownership
+-- recoverable without coupling the independently deployed scheduler process.
+CREATE TABLE IF NOT EXISTS telegram_bot_runtime (
+    singleton_id    INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    owner_id        TEXT NOT NULL,
+    started_ts      INTEGER NOT NULL,
+    heartbeat_ts    INTEGER NOT NULL,
+    lease_expires_ts INTEGER NOT NULL
+);
+
 -- Durable lifecycle audit for each scheduler callback invocation.
 CREATE TABLE IF NOT EXISTS scheduler_callback_runs (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,

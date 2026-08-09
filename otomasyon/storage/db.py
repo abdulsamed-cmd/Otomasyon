@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -1331,6 +1332,431 @@ class Database:
             (dedupe_key,),
         ).fetchone()
         return dict(row) if row is not None else None
+
+    # -- durable Telegram command transport --------------------------------
+    def persist_telegram_updates(self, updates: Iterable[dict], received_ts: int) -> int:
+        """Persist a poll batch and its next offset in one transaction."""
+        updates = list(updates)
+        if not updates:
+            value = self.get_setting("telegram_poll_offset")
+            return int(value) if value is not None else 0
+        rows = []
+        for update in updates:
+            update_id = update.get("update_id")
+            if not isinstance(update_id, int):
+                raise ValueError("Telegram update_id must be an integer")
+            rows.append(
+                (
+                    update_id,
+                    json.dumps(update, ensure_ascii=False, separators=(",", ":")),
+                    int(received_ts),
+                )
+            )
+        next_offset = max(row[0] for row in rows) + 1
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT OR IGNORE INTO telegram_command_inbox
+                    (update_id, payload_json, received_ts)
+                VALUES (?, ?, ?)
+                """,
+                rows,
+            )
+            current = self.conn.execute(
+                "SELECT value FROM app_settings WHERE key='telegram_poll_offset'"
+            ).fetchone()
+            persisted = int(current["value"]) if current is not None else 0
+            next_offset = max(persisted, next_offset)
+            self.conn.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('telegram_poll_offset', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(next_offset),),
+            )
+        return next_offset
+
+    def telegram_poll_offset(self) -> int | None:
+        value = self.get_setting("telegram_poll_offset")
+        return int(value) if value is not None else None
+
+    def recover_telegram_commands(self, now: int) -> None:
+        """Make interrupted renders retryable and uncertain sends explicit."""
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='pending', error='interrupted during render'
+                WHERE status='processing'
+                """
+            )
+            self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='ambiguous',
+                    error='process stopped after send began; delivery unknown',
+                    next_attempt_ts=?
+                WHERE status='sending'
+                """,
+                (int(now),),
+            )
+
+    def pending_telegram_inbox(self) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT update_id, payload_json, status, received_ts
+            FROM telegram_command_inbox
+            WHERE status IN ('pending', 'render_error')
+            ORDER BY update_id
+            """
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        ]
+
+    def begin_telegram_command(self, update_id: int) -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='processing', error=NULL
+                WHERE update_id=? AND status IN ('pending', 'render_error')
+                """,
+                (int(update_id),),
+            )
+        return cur.rowcount == 1
+
+    def reject_telegram_command(self, update_id: int, now: int, detail: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='completed', authorized=0, authorized_ts=?,
+                    completed_ts=?
+                WHERE update_id=?
+                """,
+                (int(now), int(now), int(update_id)),
+            )
+            self._telegram_audit(update_id, "authorization", "rejected", now, detail)
+
+    def authorize_telegram_command(
+        self, update_id: int, chat_id: int | str, command: str, now: int
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET authorized=1, authorized_ts=?, chat_id=?, command=?
+                WHERE update_id=?
+                """,
+                (int(now), str(chat_id), command, int(update_id)),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('telegram_chat_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(chat_id),),
+            )
+            self._telegram_audit(update_id, "authorization", "allowed", now, command)
+
+    def audit_telegram_command(
+        self,
+        update_id: int,
+        stage: str,
+        outcome: str,
+        now: int,
+        detail: str | None = None,
+    ) -> None:
+        with self.conn:
+            self._telegram_audit(update_id, stage, outcome, now, detail)
+
+    def _telegram_audit(
+        self,
+        update_id: int,
+        stage: str,
+        outcome: str,
+        now: int,
+        detail: str | None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO telegram_command_audit
+                (update_id, stage, outcome, occurred_ts, detail)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (int(update_id), stage, outcome, int(now), detail),
+        )
+
+    def enqueue_telegram_reply(
+        self, update_id: int, chat_id: int | str, reply_text: str, now: int
+    ) -> None:
+        """Atomically finish rendering and create the unique outbox row."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO telegram_command_outbox
+                    (update_id, chat_id, reply_text, next_attempt_ts, created_ts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (int(update_id), str(chat_id), reply_text, int(now), int(now)),
+            )
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='outbox_ready', dispatched_ts=COALESCE(dispatched_ts, ?),
+                    rendered_ts=?, error=NULL
+                WHERE update_id=?
+                """,
+                (int(now), int(now), int(update_id)),
+            )
+            self._telegram_audit(update_id, "render", "completed", now, None)
+
+    def fail_telegram_render(self, update_id: int, error: str, now: int) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='render_error', error=?, dispatched_ts=COALESCE(dispatched_ts, ?)
+                WHERE update_id=?
+                """,
+                (error, int(now), int(update_id)),
+            )
+            self._telegram_audit(update_id, "render", "error", now, error)
+
+    def due_telegram_outbox(self, now: int) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM telegram_command_outbox
+            WHERE status IN ('pending', 'retry_wait') AND next_attempt_ts<=?
+            ORDER BY update_id
+            """,
+            (int(now),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def begin_telegram_send(self, outbox_id: int, now: int) -> dict | None:
+        """Persist the uncertainty boundary before invoking sendMessage."""
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='sending', attempts=attempts+1,
+                    first_attempt_ts=COALESCE(first_attempt_ts, ?),
+                    last_attempt_ts=?, error=NULL
+                WHERE id=? AND status IN ('pending', 'retry_wait')
+                  AND next_attempt_ts<=?
+                """,
+                (int(now), int(now), int(outbox_id), int(now)),
+            )
+            if cur.rowcount != 1:
+                return None
+            row = self.conn.execute(
+                "SELECT * FROM telegram_command_outbox WHERE id=?",
+                (int(outbox_id),),
+            ).fetchone()
+            self._telegram_audit(
+                row["update_id"], "send", "attempted", now, f"attempt={row['attempts']}"
+            )
+        return dict(row)
+
+    def retry_telegram_send(
+        self, outbox_id: int, error: str, next_attempt_ts: int, now: int
+    ) -> None:
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT update_id FROM telegram_command_outbox WHERE id=?",
+                (int(outbox_id),),
+            ).fetchone()
+            self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='retry_wait', error=?, next_attempt_ts=?
+                WHERE id=? AND status='sending'
+                """,
+                (error, int(next_attempt_ts), int(outbox_id)),
+            )
+            self._telegram_audit(
+                row["update_id"], "send", "retry_scheduled", now, error
+            )
+
+    def fail_telegram_send(self, outbox_id: int, error: str, now: int) -> None:
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT update_id FROM telegram_command_outbox WHERE id=?",
+                (int(outbox_id),),
+            ).fetchone()
+            self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='failed', error=?, next_attempt_ts=?
+                WHERE id=? AND status='sending'
+                """,
+                (error, int(now), int(outbox_id)),
+            )
+            self._telegram_audit(row["update_id"], "send", "failed", now, error)
+
+    def mark_telegram_send_ambiguous(
+        self, outbox_id: int, error: str, now: int
+    ) -> None:
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT update_id FROM telegram_command_outbox WHERE id=?",
+                (int(outbox_id),),
+            ).fetchone()
+            self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='ambiguous', error=?, next_attempt_ts=?
+                WHERE id=? AND status='sending'
+                """,
+                (error, int(now), int(outbox_id)),
+            )
+            self._telegram_audit(row["update_id"], "send", "ambiguous", now, error)
+
+    def complete_telegram_send(
+        self,
+        outbox_id: int,
+        *,
+        message_id: int,
+        chat_id: int | str,
+        telegram_date: int | None,
+        now: int,
+    ) -> None:
+        """Atomically store acknowledgement, receipt, and terminal states."""
+        with self.conn:
+            row = self.conn.execute(
+                """
+                SELECT o.*, i.received_ts, i.authorized_ts, i.dispatched_ts,
+                       i.rendered_ts
+                FROM telegram_command_outbox o
+                JOIN telegram_command_inbox i ON i.update_id=o.update_id
+                WHERE o.id=? AND o.status='sending'
+                """,
+                (int(outbox_id),),
+            ).fetchone()
+            if row is None:
+                raise sqlite3.IntegrityError("outbox send is not active")
+            self.conn.execute(
+                """
+                INSERT INTO telegram_command_reply_receipts
+                    (update_id, outbox_id, chat_id, message_id, telegram_date,
+                     received_ts, authorized_ts, dispatched_ts, rendered_ts,
+                     first_attempt_ts, acknowledged_ts, sent_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["update_id"],
+                    int(outbox_id),
+                    str(chat_id),
+                    int(message_id),
+                    int(telegram_date) if telegram_date is not None else None,
+                    row["received_ts"],
+                    row["authorized_ts"],
+                    row["dispatched_ts"],
+                    row["rendered_ts"],
+                    row["first_attempt_ts"],
+                    int(now),
+                    int(now),
+                ),
+            )
+            self.conn.execute(
+                """
+                UPDATE telegram_command_outbox
+                SET status='sent', sent_ts=?, error=NULL
+                WHERE id=?
+                """,
+                (int(now), int(outbox_id)),
+            )
+            self.conn.execute(
+                """
+                UPDATE telegram_command_inbox
+                SET status='completed', completed_ts=?, error=NULL
+                WHERE update_id=?
+                """,
+                (int(now), row["update_id"]),
+            )
+            self._telegram_audit(
+                row["update_id"], "send", "acknowledged", now, f"message_id={message_id}"
+            )
+
+    def acquire_telegram_bot_lease(
+        self, owner_id: str, now: int, lease_seconds: int
+    ) -> bool:
+        expires = int(now) + int(lease_seconds)
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO telegram_bot_runtime
+                    (singleton_id, owner_id, started_ts, heartbeat_ts,
+                     lease_expires_ts)
+                VALUES (1, ?, ?, ?, ?)
+                """,
+                (owner_id, int(now), int(now), expires),
+            )
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_bot_runtime
+                SET owner_id=?,
+                    started_ts=CASE WHEN owner_id=? THEN started_ts ELSE ? END,
+                    heartbeat_ts=?, lease_expires_ts=?
+                WHERE singleton_id=1
+                  AND (owner_id=? OR lease_expires_ts<=?)
+                """,
+                (
+                    owner_id,
+                    owner_id,
+                    int(now),
+                    int(now),
+                    expires,
+                    owner_id,
+                    int(now),
+                ),
+            )
+        return cur.rowcount == 1
+
+    def telegram_bot_runtime(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM telegram_bot_runtime WHERE singleton_id=1"
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def telegram_command_inbox(self, update_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM telegram_command_inbox WHERE update_id=?",
+            (int(update_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def telegram_command_outbox(self, update_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM telegram_command_outbox WHERE update_id=?",
+            (int(update_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def telegram_command_receipt(self, update_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM telegram_command_reply_receipts WHERE update_id=?",
+            (int(update_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def telegram_command_audit(self, update_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT stage, outcome, occurred_ts, detail
+            FROM telegram_command_audit WHERE update_id=? ORDER BY id
+            """,
+            (int(update_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # -- scheduler callback audit ------------------------------------------
     def start_scheduler_callback(self, callback_name: str, started_ts: int) -> int:
