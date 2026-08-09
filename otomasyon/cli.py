@@ -99,6 +99,9 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
         liveness_callback=lambda: service.check_bot_liveness(args.db, client),
+        notification_callback=lambda: service.deliver_pending_notifications(
+            args.db, client
+        ),
         interval=args.interval,
         db_path=args.db,
     )

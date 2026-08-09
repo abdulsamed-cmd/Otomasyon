@@ -180,3 +180,35 @@ def settle_coupon(legs: list[dict], results: dict[int, MatchResult]) -> CouponSe
     return CouponSettlement(
         status=status, legs=leg_settlements, effective_odds=effective, profit=profit
     )
+
+
+def settlement_from_coupon(coupon: dict) -> CouponSettlement:
+    """Rebuild a settlement from a coupon whose legs were already decided.
+
+    Used to re-announce a result that was decided but never delivered, so the
+    message matches what the original notification would have said.
+    """
+    legs = [
+        LegSettlement(
+            event_id=leg["event_id"],
+            outcome=leg.get("outcome_name", ""),
+            odd=leg["odd"],
+            result=leg.get("result") or PENDING,
+        )
+        for leg in coupon.get("legs", [])
+    ]
+    status = coupon.get("status", PENDING)
+    effective = 1.0
+    for leg in legs:
+        if leg.result == WIN:
+            effective *= leg.odd
+
+    if status == "lost":
+        return CouponSettlement(status=status, legs=legs, effective_odds=0.0, profit=-1.0)
+    if status == "void":
+        return CouponSettlement(status=status, legs=legs, effective_odds=1.0, profit=0.0)
+    if status == "won":
+        return CouponSettlement(
+            status=status, legs=legs, effective_odds=effective, profit=effective - 1.0
+        )
+    return CouponSettlement(status=PENDING, legs=legs)

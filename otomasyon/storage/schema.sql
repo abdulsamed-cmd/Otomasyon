@@ -449,6 +449,51 @@ CREATE TABLE IF NOT EXISTS telegram_bot_runtime (
     last_poll_error TEXT
 );
 
+-- Durable queue for messages the automation sends on its own initiative
+-- (settled coupons, archive summaries, warnings). A coupon is settled in the
+-- same transaction that queues its notification, so a send failure delays the
+-- message instead of losing it forever.
+CREATE TABLE IF NOT EXISTS telegram_notification_outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedupe_key      TEXT NOT NULL UNIQUE,
+    kind            TEXT NOT NULL,
+    chat_id         TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN (
+                        'pending', 'sending', 'retry_wait', 'sent',
+                        'ambiguous', 'failed'
+                    )),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_ts INTEGER NOT NULL,
+    created_ts      INTEGER NOT NULL,
+    first_attempt_ts INTEGER,
+    last_attempt_ts INTEGER,
+    sent_ts         INTEGER,
+    message_id      INTEGER,
+    error           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_outbox_due
+    ON telegram_notification_outbox(status, next_attempt_ts, id);
+
+-- Forensic trace of every getUpdates attempt. The gap between successful polls
+-- is exactly how long a user's message can sit unseen, so it is recorded
+-- rather than inferred.
+CREATE TABLE IF NOT EXISTS telegram_poll_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id     TEXT NOT NULL,
+    started_ts   REAL NOT NULL,
+    ended_ts     REAL NOT NULL,
+    duration_ms  INTEGER NOT NULL,
+    outcome      TEXT NOT NULL,
+    update_count INTEGER NOT NULL DEFAULT 0,
+    error        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_poll_log_started
+    ON telegram_poll_log(started_ts);
+
 -- Durable lifecycle audit for each scheduler callback invocation.
 CREATE TABLE IF NOT EXISTS scheduler_callback_runs (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,

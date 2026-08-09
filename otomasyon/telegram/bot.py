@@ -281,26 +281,37 @@ class Bot:
             reset()
 
     def _fetch_updates(self, timeout: int | None) -> list[dict]:
-        """Fetch updates, recording poll health so stalls are observable."""
+        """Fetch updates, tracing every attempt so stalls are reconstructable."""
+        started = time.time()
         try:
             updates = self.client.get_updates(
                 offset=self.db.telegram_poll_offset(), timeout=timeout
             )
         except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
             self._poll_failures += 1
-            self.db.record_telegram_poll(
+            self.db.log_telegram_poll(
                 self.owner_id,
-                int(self.clock()),
-                ok=False,
-                error=f"{type(exc).__name__}: {exc}",
+                started_ts=started,
+                ended_ts=time.time(),
+                outcome="error",
+                error=detail,
             )
-            # Repeated failures mean the pooled socket is unusable, not that
-            # Telegram is down; dial a fresh connection before messages pile up.
-            if self._poll_failures >= self.poll_reset_after_failures:
-                self._reset_connection()
-                self._poll_failures = 0
+            self.db.record_telegram_poll(
+                self.owner_id, int(self.clock()), ok=False, error=detail
+            )
+            # A failed poll leaves the socket suspect, and reusing it stalls the
+            # next attempt too, so the connection is retired immediately.
+            self._reset_connection()
             raise
         self._poll_failures = 0
+        self.db.log_telegram_poll(
+            self.owner_id,
+            started_ts=started,
+            ended_ts=time.time(),
+            outcome="ok",
+            update_count=len(updates),
+        )
         self.db.record_telegram_poll(self.owner_id, int(self.clock()), ok=True)
         return updates
 

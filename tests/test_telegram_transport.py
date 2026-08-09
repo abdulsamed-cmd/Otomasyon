@@ -91,14 +91,27 @@ def test_long_poll_is_short_enough_to_bound_a_silent_drop():
 def test_poll_timeout_raises_poll_error_and_retires_the_socket():
     session = RecordingSession([requests.Timeout("read timed out")])
     client = TelegramClient(token="test-token")
-    client.session = session
+    client.poll_session = session
     client._owns_session = True
 
     with pytest.raises(TelegramPollError):
         client.get_updates(offset=1)
 
     assert session.closed == 1
-    assert client.session is not session
+    assert client.poll_session is not session
+
+
+def test_sends_never_retry_automatically():
+    """An automatic retry after delivery would send the same message twice."""
+    client = TelegramClient(token="test-token")
+    send_adapter = client.session.get_adapter("https://api.telegram.org")
+    poll_adapter = client.poll_session.get_adapter("https://api.telegram.org")
+
+    assert send_adapter.max_retries.total == 0
+    assert poll_adapter.max_retries.connect == (
+        config.TELEGRAM_POLL_CONNECT_RETRIES
+    )
+    assert client.session is not client.poll_session
 
 
 def test_injected_sessions_are_never_rebuilt():

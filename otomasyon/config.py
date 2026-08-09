@@ -96,6 +96,18 @@ TELEGRAM_POLL_RETRY_BASE_SECONDS = 0.5
 TELEGRAM_POLL_RETRY_MAX_SECONDS = 5.0
 # Consecutive poll failures before the connection pool is rebuilt outright.
 TELEGRAM_POLL_RESET_AFTER_FAILURES = 3
+# A pooled connection closed by the far end is redialled transparently. Only
+# polling may retry; a retried send could deliver the same message twice.
+TELEGRAM_POLL_CONNECT_RETRIES = 2
+# Poll traces are diagnostic; keep a bounded window.
+TELEGRAM_POLL_LOG_RETENTION_SECONDS = 3 * 24 * 60 * 60
+
+# Outbound notifications (settled coupons, summaries) are queued and retried
+# until Telegram acknowledges them, so a transient failure delays a result
+# instead of losing it.
+NOTIFICATION_MAX_ATTEMPTS = 8
+NOTIFICATION_RETRY_BASE_SECONDS = 5
+NOTIFICATION_RETRY_MAX_SECONDS = 300
 # Lease held by the live bot process. A crashed process cannot answer, so the
 # lease must expire quickly enough for a restart to take over unnoticed.
 TELEGRAM_BOT_LEASE_SECONDS = 45

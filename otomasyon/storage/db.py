@@ -1118,6 +1118,61 @@ class Database:
                 updated += 1
         return updated
 
+    def decided_coupons_for_dates(self, for_dates: Iterable[str]) -> list[dict]:
+        """Decided coupons with full leg detail, ready to be re-announced."""
+        dates = list(for_dates)
+        if not dates:
+            return []
+        placeholders = ",".join("?" for _ in dates)
+        coupons = self.conn.execute(
+            f"""
+            SELECT * FROM coupons
+            WHERE status IN ('won','lost','void') AND for_date IN ({placeholders})
+            ORDER BY id
+            """,
+            dates,
+        ).fetchall()
+        out = []
+        for c in coupons:
+            legs = self.conn.execute(
+                """
+                SELECT cl.*, e.home AS home, e.away AS away,
+                       e.start_ts AS start_ts
+                FROM coupon_legs cl
+                LEFT JOIN events e ON e.id = cl.event_id
+                WHERE cl.coupon_id = ?
+                """,
+                (c["id"],),
+            ).fetchall()
+            out.append(
+                {
+                    "id": c["id"],
+                    "kind": c["kind"],
+                    "status": c["status"],
+                    "for_date": c["for_date"],
+                    "notes": c["notes"],
+                    "total_odds": c["total_odds"],
+                    "legs": [
+                        {
+                            "id": leg["id"],
+                            "event_id": leg["event_id"],
+                            "home": leg["home"],
+                            "away": leg["away"],
+                            "start_ts": leg["start_ts"],
+                            "market_t": leg["market_t"],
+                            "market_st": leg["market_st"],
+                            "market_sov": leg["market_sov"],
+                            "market_name": leg["market_name"],
+                            "outcome_name": leg["outcome_name"],
+                            "odd": leg["odd_at_creation"],
+                            "result": leg["result"],
+                        }
+                        for leg in legs
+                    ],
+                }
+            )
+        return out
+
     def settled_coupons(self) -> list[dict]:
         """Decided coupons with their legs, for metrics."""
         coupons = self.conn.execute(
@@ -1774,6 +1829,165 @@ class Database:
             "SELECT * FROM telegram_bot_runtime WHERE singleton_id=1"
         ).fetchone()
         return dict(row) if row is not None else None
+
+    def log_telegram_poll(
+        self,
+        owner_id: str,
+        *,
+        started_ts: float,
+        ended_ts: float,
+        outcome: str,
+        update_count: int = 0,
+        error: str | None = None,
+    ) -> None:
+        """Trace one getUpdates attempt so stalls can be reconstructed later."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO telegram_poll_log
+                    (owner_id, started_ts, ended_ts, duration_ms, outcome,
+                     update_count, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_id,
+                    float(started_ts),
+                    float(ended_ts),
+                    int((ended_ts - started_ts) * 1000),
+                    outcome,
+                    int(update_count),
+                    error,
+                ),
+            )
+
+    # -- Durable outbound notifications -------------------------------------
+    def queue_notification(
+        self,
+        *,
+        dedupe_key: str,
+        kind: str,
+        chat_id: int | str,
+        body: str,
+        now: int,
+    ) -> bool:
+        """Queue a notification exactly once. Returns False if already queued."""
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO telegram_notification_outbox
+                    (dedupe_key, kind, chat_id, body, next_attempt_ts,
+                     created_ts)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (dedupe_key, kind, str(chat_id), body, int(now), int(now)),
+            )
+        return cur.rowcount == 1
+
+    def due_notifications(self, now: int) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM telegram_notification_outbox
+            WHERE status IN ('pending', 'retry_wait') AND next_attempt_ts<=?
+            ORDER BY id
+            """,
+            (int(now),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def begin_notification_send(self, notification_id: int, now: int) -> dict | None:
+        """Claim a queued notification so only one sender can transmit it."""
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET status='sending', attempts=attempts + 1,
+                    first_attempt_ts=COALESCE(first_attempt_ts, ?),
+                    last_attempt_ts=?
+                WHERE id=? AND status IN ('pending', 'retry_wait')
+                """,
+                (int(now), int(now), int(notification_id)),
+            )
+            if cur.rowcount != 1:
+                return None
+            row = self.conn.execute(
+                "SELECT * FROM telegram_notification_outbox WHERE id=?",
+                (int(notification_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def complete_notification_send(
+        self, notification_id: int, *, message_id: int, now: int
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET status='sent', sent_ts=?, message_id=?, error=NULL
+                WHERE id=? AND status='sending'
+                """,
+                (int(now), int(message_id), int(notification_id)),
+            )
+
+    def retry_notification_send(
+        self, notification_id: int, error: str, next_attempt_ts: int
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET status='retry_wait', error=?, next_attempt_ts=?
+                WHERE id=? AND status='sending'
+                """,
+                (error, int(next_attempt_ts), int(notification_id)),
+            )
+
+    def fail_notification_send(self, notification_id: int, error: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET status='failed', error=?
+                WHERE id=? AND status='sending'
+                """,
+                (error, int(notification_id)),
+            )
+
+    def recover_notifications(self, now: int) -> int:
+        """Requeue sends interrupted mid-flight by a restart."""
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                UPDATE telegram_notification_outbox
+                SET status='retry_wait',
+                    error='process stopped while sending',
+                    next_attempt_ts=?
+                WHERE status='sending'
+                """,
+                (int(now),),
+            )
+        return cur.rowcount
+
+    def notification(self, dedupe_key: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM telegram_notification_outbox WHERE dedupe_key=?",
+            (dedupe_key,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def telegram_poll_log(self, limit: int = 200) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM telegram_poll_log ORDER BY id LIMIT ?", (int(limit),)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def prune_telegram_poll_log(self, keep_seconds: int, now: float) -> int:
+        """Keep the trace bounded; it is diagnostic, not a permanent record."""
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM telegram_poll_log WHERE started_ts < ?",
+                (float(now) - float(keep_seconds),),
+            )
+        return cur.rowcount
 
     def record_telegram_poll(
         self, owner_id: str, now: int, *, ok: bool, error: str | None = None

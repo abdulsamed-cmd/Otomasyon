@@ -13,6 +13,7 @@ import math
 import hashlib
 import pickle
 import statistics
+from collections.abc import Iterable
 from itertools import combinations
 from datetime import date, datetime, timedelta
 
@@ -202,8 +203,16 @@ def record_result(db_path: str, result: settlement.MatchResult) -> None:
         db.save_result(result)
 
 
+def settlement_dedupe_key(coupon_id: int) -> str:
+    return f"coupon_settled:{int(coupon_id)}"
+
+
 def settle_pending(db_path: str, client=None, *, notify: bool = True) -> list[dict]:
-    """Settle any pending coupon whose results are in; optionally notify.
+    """Settle any pending coupon whose results are in; queue notifications.
+
+    The notification is queued rather than sent inline. A coupon is settled
+    only once, so a send that failed inline could never be retried and the
+    result silently disappeared. Queuing separates "decided" from "delivered".
 
     Returns a list of {coupon, settlement} for the coupons that got decided.
     """
@@ -222,12 +231,105 @@ def settle_pending(db_path: str, client=None, *, notify: bool = True) -> list[di
             leg_ids = [leg["id"] for leg in coupon["legs"]]
             db.apply_settlement(coupon["id"], leg_ids, st)
             decided.append({"coupon": coupon, "settlement": st})
+            if notify and chat_id:
+                db.queue_notification(
+                    dedupe_key=settlement_dedupe_key(coupon["id"]),
+                    kind="coupon_settled",
+                    chat_id=chat_id,
+                    body=formatting.format_settlement(coupon, st),
+                    now=int(time.time()),
+                )
 
-    if notify and client and chat_id:
-        for item in decided:
-            text = formatting.format_settlement(item["coupon"], item["settlement"])
-            client.send_message(chat_id, text)
+    if notify and client:
+        drain_notifications(db_path, client)
     return decided
+
+
+def queue_missing_settlement_notifications(
+    db_path: str, *, for_dates: Iterable[str] | None = None
+) -> int:
+    """Queue results that were decided but never announced.
+
+    Settlement used to write the coupon status before attempting delivery, so a
+    failed send left a decided coupon with no notification and no way to retry.
+    This reconciles those, bounded to the given dates so old history is not
+    replayed into the chat.
+    """
+    today = datetime.now(tz=config.TIMEZONE).strftime("%Y-%m-%d")
+    dates = set(for_dates) if for_dates is not None else {today}
+    queued = 0
+    now = int(time.time())
+    with Database(db_path) as db:
+        chat_id = db.get_setting("telegram_chat_id")
+        if not chat_id:
+            return 0
+        for coupon in db.decided_coupons_for_dates(dates):
+            key = settlement_dedupe_key(coupon["id"])
+            if db.notification(key) is not None:
+                continue
+            st = settlement.settlement_from_coupon(coupon)
+            if db.queue_notification(
+                dedupe_key=key,
+                kind="coupon_settled",
+                chat_id=chat_id,
+                body=formatting.format_settlement(coupon, st),
+                now=now,
+            ):
+                queued += 1
+    return queued
+
+
+def drain_notifications(db_path: str, client, *, now: int | None = None) -> dict:
+    """Deliver queued notifications, retrying transient failures.
+
+    A notification is marked sent only after Telegram acknowledges it, so a
+    crash or network failure delays delivery instead of dropping it.
+    """
+    now = int(now if now is not None else time.time())
+    sent = 0
+    retried = 0
+    failed = 0
+    with Database(db_path) as db:
+        db.recover_notifications(now)
+        due = db.due_notifications(now)
+
+    for candidate in due:
+        with Database(db_path) as db:
+            row = db.begin_notification_send(candidate["id"], now)
+        if row is None:
+            continue
+        try:
+            response = client.send_message(row["chat_id"], row["body"])
+            _, message_id, _ = _telegram_delivery(response, row["chat_id"])
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            with Database(db_path) as db:
+                if row["attempts"] >= config.NOTIFICATION_MAX_ATTEMPTS:
+                    db.fail_notification_send(row["id"], detail)
+                    failed += 1
+                else:
+                    delay = min(
+                        config.NOTIFICATION_RETRY_BASE_SECONDS
+                        * (2 ** max(0, row["attempts"] - 1)),
+                        config.NOTIFICATION_RETRY_MAX_SECONDS,
+                    )
+                    db.retry_notification_send(
+                        row["id"], detail, int(time.time()) + delay
+                    )
+                    retried += 1
+            continue
+        with Database(db_path) as db:
+            db.complete_notification_send(
+                row["id"], message_id=message_id, now=int(time.time())
+            )
+        sent += 1
+    return {"sent": sent, "retried": retried, "failed": failed}
+
+
+def deliver_pending_notifications(db_path: str, client) -> dict:
+    """Reconcile missed results, then deliver everything still queued."""
+    queue_missing_settlement_notifications(db_path)
+    return drain_notifications(db_path, client)
 
 
 def metrics(db_path: str) -> dict:

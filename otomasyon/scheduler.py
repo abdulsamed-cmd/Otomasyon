@@ -29,6 +29,7 @@ class Scheduler:
         result_callback: Callable[[], object],
         context_callback: Callable[[], object],
         liveness_callback: Callable[[], object] | None = None,
+        notification_callback: Callable[[], object] | None = None,
         interval: float,
         db_path: str | None = None,
     ) -> None:
@@ -47,6 +48,13 @@ class Scheduler:
             ScheduledCallback("daily push", push_callback),
             ScheduledCallback("result polling", result_callback),
             ScheduledCallback("context capture", context_callback),
+            # Draining runs last so anything queued earlier in this cycle,
+            # including a just-settled coupon, goes out without waiting.
+            *(
+                (ScheduledCallback("notifications", notification_callback),)
+                if notification_callback is not None
+                else ()
+            ),
         )
         self.interval = interval
         self.db_path = db_path

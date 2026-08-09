@@ -433,8 +433,8 @@ def test_failed_poll_keeps_offset_so_the_message_arrives_next_poll(tmp_path):
         assert runtime["last_poll_error"] is None
 
 
-def test_repeated_poll_failures_rebuild_the_connection(tmp_path):
-    """A dead pooled socket is retired instead of stalling every poll."""
+def test_every_poll_failure_rebuilds_the_connection(tmp_path):
+    """Reusing a socket that just failed stalls the next poll as well."""
     path = str(tmp_path / "poll-reset.db")
 
     class ResettableClient(PlannedTelegram):
@@ -446,18 +446,30 @@ def test_repeated_poll_failures_rebuild_the_connection(tmp_path):
             self.resets += 1
 
     client = ResettableClient()
-    bot = _durable_bot(
-        path, client, Clock(), owner_id="reset", poll_reset_after_failures=3
-    )
+    bot = _durable_bot(path, client, Clock(), owner_id="reset")
 
-    for _ in range(2):
+    for expected in (1, 2, 3):
         with pytest.raises(TimeoutError):
             bot.poll_once(timeout=0)
-    assert client.resets == 0
+        assert client.resets == expected
+
+
+def test_poll_attempts_are_traced_for_forensics(tmp_path):
+    """The gap between successful polls must be reconstructable after the fact."""
+    path = str(tmp_path / "poll-trace.db")
+    update = _update(410, "AbdulsamedErden", "durum", chat_id=42)
+    client = PlannedTelegram(polls=[TimeoutError("dropped"), [update]])
+    bot = _durable_bot(path, client, Clock(), owner_id="trace")
 
     with pytest.raises(TimeoutError):
         bot.poll_once(timeout=0)
-    assert client.resets == 1
+    bot.poll_once(timeout=0)
+
+    with Database(path) as db:
+        rows = db.telegram_poll_log()
+    assert [row["outcome"] for row in rows] == ["error", "ok"]
+    assert "dropped" in rows[0]["error"]
+    assert rows[1]["update_count"] == 1
 
 
 def test_poll_recovery_retries_within_a_second(tmp_path):

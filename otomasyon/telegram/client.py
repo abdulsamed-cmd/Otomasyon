@@ -14,6 +14,7 @@ from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .. import config
 
@@ -50,10 +51,25 @@ class KeepAliveAdapter(HTTPAdapter):
         super().init_poolmanager(*args, **kwargs)
 
 
-def build_session() -> requests.Session:
-    """A session whose sockets send keep-alive probes while idle."""
+def build_session(*, connection_retries: int = 0) -> requests.Session:
+    """A session whose sockets send keep-alive probes while idle.
+
+    ``connection_retries`` transparently redials when a pooled connection was
+    closed by the far end. It must stay at zero for sends, because a retry
+    after the request reached Telegram would deliver the message twice.
+    """
+    retries = Retry(
+        total=connection_retries,
+        connect=connection_retries,
+        read=0,
+        status=0,
+        redirect=0,
+        backoff_factor=0.2,
+        allowed_methods=None,
+        raise_on_status=False,
+    )
     session = requests.Session()
-    adapter = KeepAliveAdapter()
+    adapter = KeepAliveAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -101,16 +117,23 @@ class TelegramClient:
         # Injected sessions belong to the caller and are never rebuilt.
         self._owns_session = session is None
         self.session = session or build_session()
+        # Polling gets its own session so redialling a dropped long poll can
+        # never retry a send and deliver a message twice.
+        self.poll_session = session or build_session(
+            connection_retries=config.TELEGRAM_POLL_CONNECT_RETRIES
+        )
 
     def reset_connections(self) -> None:
-        """Discard pooled sockets so the next call dials a fresh connection."""
+        """Discard pooled sockets so the next poll dials a fresh connection."""
         if not self._owns_session:
             return
         try:
-            self.session.close()
+            self.poll_session.close()
         except Exception:  # pragma: no cover - closing must never mask errors
             pass
-        self.session = build_session()
+        self.poll_session = build_session(
+            connection_retries=config.TELEGRAM_POLL_CONNECT_RETRIES
+        )
 
     def _call(self, method: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{API_ROOT}/bot{self.token}/{method}"
@@ -133,7 +156,9 @@ class TelegramClient:
         url = f"{API_ROOT}/bot{self.token}/getUpdates"
         read_timeout = poll_timeout + POLL_READ_MARGIN_SECONDS
         try:
-            response = self.session.get(url, params=params, timeout=read_timeout)
+            response = self.poll_session.get(
+                url, params=params, timeout=read_timeout
+            )
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             # The socket is unusable or suspect; a fresh one avoids stalling
