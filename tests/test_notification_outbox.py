@@ -14,7 +14,11 @@ from otomasyon.iddaa.normalize import NormalizedEvent
 from otomasyon.settlement import MatchResult
 from otomasyon.storage import Database
 
-TODAY = "2026-08-09"
+from datetime import datetime
+
+# Reconciliation is bounded to the current day, so the fixture has to follow
+# the real calendar rather than a frozen date.
+TODAY = datetime.now(tz=config.TIMEZONE).strftime("%Y-%m-%d")
 
 
 class Telegram:

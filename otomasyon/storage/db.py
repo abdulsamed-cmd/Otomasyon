@@ -1637,7 +1637,8 @@ class Database:
         rows = self.conn.execute(
             """
             SELECT * FROM telegram_command_outbox
-            WHERE status IN ('pending', 'retry_wait') AND next_attempt_ts<=?
+            WHERE status IN ('pending', 'retry_wait', 'ambiguous')
+              AND next_attempt_ts<=?
             ORDER BY update_id
             """,
             (int(now),),
@@ -1653,7 +1654,7 @@ class Database:
                 SET status='sending', attempts=attempts+1,
                     first_attempt_ts=COALESCE(first_attempt_ts, ?),
                     last_attempt_ts=?, error=NULL
-                WHERE id=? AND status IN ('pending', 'retry_wait')
+                WHERE id=? AND status IN ('pending', 'retry_wait', 'ambiguous')
                   AND next_attempt_ts<=?
                 """,
                 (int(now), int(now), int(outbox_id), int(now)),
@@ -1706,8 +1707,15 @@ class Database:
             self._telegram_audit(row["update_id"], "send", "failed", now, error)
 
     def mark_telegram_send_ambiguous(
-        self, outbox_id: int, error: str, now: int
+        self, outbox_id: int, error: str, now: int, next_attempt_ts: int | None = None
     ) -> None:
+        """Record that delivery is unproven and schedule another attempt.
+
+        The outcome is genuinely unknown, so a retry may repeat a reply the
+        user already saw. That is the better error: this is an answer the user
+        explicitly asked for, and staying silent is indistinguishable from a
+        dead bot.
+        """
         with self.conn:
             row = self.conn.execute(
                 "SELECT update_id FROM telegram_command_outbox WHERE id=?",
@@ -1719,7 +1727,11 @@ class Database:
                 SET status='ambiguous', error=?, next_attempt_ts=?
                 WHERE id=? AND status='sending'
                 """,
-                (error, int(now), int(outbox_id)),
+                (
+                    error,
+                    int(now if next_attempt_ts is None else next_attempt_ts),
+                    int(outbox_id),
+                ),
             )
             self._telegram_audit(row["update_id"], "send", "ambiguous", now, error)
 

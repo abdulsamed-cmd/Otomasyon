@@ -310,7 +310,13 @@ def test_definitive_send_failures_retry_with_bounded_backoff(tmp_path):
     assert len(client.sent) == 4
 
 
-def test_ambiguous_send_timeout_is_retained_and_never_auto_retried(tmp_path):
+def test_an_unproven_send_is_retried_rather_than_left_unanswered(tmp_path):
+    """Silence is indistinguishable from a dead bot; a repeat reply is not.
+
+    A send that times out after the request was uploaded may or may not have
+    reached Telegram. Treating that as final once left a user's command with no
+    answer at all, which is the worse of the two failures.
+    """
     path = str(tmp_path / "ambiguous.db")
     clock = Clock()
     client = PlannedTelegram(
@@ -321,18 +327,41 @@ def test_ambiguous_send_timeout_is_retained_and_never_auto_retried(tmp_path):
     assert bot.poll_once(timeout=0) == 0
 
     with Database(path) as db:
-        assert db.telegram_command_outbox(80)["status"] == "ambiguous"
+        pending = db.telegram_command_outbox(80)
+        assert pending["status"] == "ambiguous"
+        assert pending["next_attempt_ts"] > int(clock())
         assert db.telegram_command_receipt(80) is None
 
     clock.advance(301)
     restarted_client = PlannedTelegram([])
-    restarted = _durable_bot(
-        path, restarted_client, clock, owner_id="after"
-    )
-    assert restarted.poll_once(timeout=0) == 0
-    assert restarted_client.sent == []
+    restarted = _durable_bot(path, restarted_client, clock, owner_id="after")
+    assert restarted.poll_once(timeout=0) == 1
+
+    assert len(restarted_client.sent) == 1
     with Database(path) as db:
-        assert db.telegram_command_outbox(80)["status"] == "ambiguous"
+        assert db.telegram_command_outbox(80)["status"] == "sent"
+        assert db.telegram_command_receipt(80) is not None
+
+
+def test_an_unproven_send_stops_after_a_bounded_number_of_attempts(tmp_path):
+    """Retrying forever would spam the chat with the same answer."""
+    path = str(tmp_path / "ambiguous-bounded.db")
+    clock = Clock()
+    attempts = 4
+    client = PlannedTelegram(
+        [_update(81, "AbdulsamedErden", "bugün")],
+        sends=[TimeoutError("unproven")] * (attempts + 2),
+    )
+    bot = _durable_bot(path, client, clock, owner_id="bounded")
+    bot.poll_once(timeout=0)
+    for _ in range(attempts + 1):
+        clock.advance(301)
+        bot.poll_once(timeout=0)
+
+    with Database(path) as db:
+        row = db.telegram_command_outbox(81)
+    assert row["status"] == "failed"
+    assert row["attempts"] == attempts
 
 
 def test_read_timeout_keeps_offset_and_does_not_duplicate_receipted_reply(tmp_path):
@@ -350,7 +379,7 @@ def test_read_timeout_keeps_offset_and_does_not_duplicate_receipted_reply(tmp_pa
     assert len(client.sent) == 1
 
 
-def test_interrupted_sending_state_becomes_ambiguous_on_restart(tmp_path):
+def test_a_send_interrupted_by_a_crash_is_completed_after_restart(tmp_path):
     path = str(tmp_path / "crash.db")
     update = _update(100, "AbdulsamedErden", "bugün")
     clock = Clock()
@@ -367,10 +396,13 @@ def test_interrupted_sending_state_becomes_ambiguous_on_restart(tmp_path):
     restarted = _durable_bot(
         path, restarted_client, clock, owner_id="replacement"
     )
-    assert restarted.poll_once(timeout=0) == 0
-    assert restarted_client.sent == []
+    assert restarted.poll_once(timeout=0) == 1
+
+    # The crash left delivery unproven, so the replacement finishes the job
+    # instead of abandoning the user's command.
+    assert len(restarted_client.sent) == 1
     with Database(path) as db:
-        assert db.telegram_command_outbox(100)["status"] == "ambiguous"
+        assert db.telegram_command_outbox(100)["status"] == "sent"
 
 
 def test_single_instance_lease_heartbeats_and_expires(tmp_path):

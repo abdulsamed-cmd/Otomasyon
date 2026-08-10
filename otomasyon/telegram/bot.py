@@ -230,9 +230,17 @@ class Bot:
                 failed_at = int(self.clock())
                 detail = f"{type(exc).__name__}: {exc}"
                 if getattr(exc, "ambiguous", True):
-                    self.db.mark_telegram_send_ambiguous(
-                        row["id"], detail, failed_at
-                    )
+                    # Delivery is unproven. Retrying may repeat a reply the
+                    # user already has; not retrying guarantees they get
+                    # nothing. For a reply they explicitly asked for, a
+                    # duplicate is the lesser failure.
+                    if row["attempts"] >= self.max_send_attempts:
+                        self.db.fail_telegram_send(row["id"], detail, failed_at)
+                    else:
+                        delay = self._retry_delay(row["attempts"], None)
+                        self.db.mark_telegram_send_ambiguous(
+                            row["id"], detail, failed_at, failed_at + delay
+                        )
                 elif getattr(exc, "retryable", False):
                     if row["attempts"] >= self.max_send_attempts:
                         self.db.fail_telegram_send(row["id"], detail, failed_at)
@@ -256,8 +264,12 @@ class Bot:
                 else None
             )
             if message_id is None or response_chat_id is None:
+                unresolved = int(self.clock())
                 self.db.mark_telegram_send_ambiguous(
-                    row["id"], "sendMessage acknowledgement missing ids", int(self.clock())
+                    row["id"],
+                    "sendMessage acknowledgement missing ids",
+                    unresolved,
+                    unresolved + self._retry_delay(row["attempts"], None),
                 )
                 continue
             self.db.complete_telegram_send(
