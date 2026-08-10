@@ -428,61 +428,37 @@ def backtest(
         )
 
     profits = [bet["profit"] for bet in bets]
-    roi = statistics.mean(profits) if profits else 0.0
-    if len(profits) > 1:
-        margin = 1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
-    else:
-        margin = 0.0
+    roi, roi_ci = probability.roi_interval(profits)
     market_breakdown = {}
     for market in ("1X2", "OU25"):
         selected = [bet for bet in bets if bet["market"] == market]
-        market_profits = [bet["profit"] for bet in selected]
-        market_roi = (
-            statistics.mean(market_profits) if market_profits else 0.0
-        )
-        market_margin = (
-            1.96
-            * statistics.stdev(market_profits)
-            / math.sqrt(len(market_profits))
-            if len(market_profits) > 1
-            else 0.0
+        market_roi, market_ci = probability.roi_interval(
+            bet["profit"] for bet in selected
         )
         market_breakdown[market] = {
             "bets": len(selected),
             "wins": sum(bet["won"] for bet in selected),
             "roi": market_roi,
-            "roi_ci95": (
-                market_roi - market_margin,
-                market_roi + market_margin,
-            ),
+            "roi_ci95": market_ci,
         }
     outcome_breakdown = {}
     for outcome in ("1", "0", "2", "Alt 2.5", "Üst 2.5"):
         selected = [bet for bet in bets if bet["outcome"] == outcome]
-        outcome_profits = [bet["profit"] for bet in selected]
-        outcome_roi = (
-            statistics.mean(outcome_profits) if outcome_profits else 0.0
-        )
-        outcome_margin = (
-            1.96
-            * statistics.stdev(outcome_profits)
-            / math.sqrt(len(outcome_profits))
-            if len(outcome_profits) > 1
-            else 0.0
+        outcome_roi, outcome_ci = probability.roi_interval(
+            bet["profit"] for bet in selected
         )
         outcome_breakdown[outcome] = {
             "bets": len(selected),
             "wins": sum(bet["won"] for bet in selected),
             "roi": outcome_roi,
-            "roi_ci95": (
-                outcome_roi - outcome_margin,
-                outcome_roi + outcome_margin,
-            ),
+            "roi_ci95": outcome_ci,
         }
 
+    # An unmeasurable interval can never clear the gate: too few bets to know.
     gate_passed = (
         len(bets) >= config.MODEL_GATE_MIN_BETS
-        and roi - margin > config.MODEL_GATE_MIN_ROI_CI_LOW
+        and roi_ci is not None
+        and roi_ci[0] > config.MODEL_GATE_MIN_ROI_CI_LOW
     )
     return {
         "train_matches": len(train),
@@ -499,7 +475,7 @@ def backtest(
         "wins": sum(bet["won"] for bet in bets),
         "hit_rate": (sum(bet["won"] for bet in bets) / len(bets)) if bets else 0.0,
         "roi": roi,
-        "roi_ci95": (roi - margin, roi + margin),
+        "roi_ci95": roi_ci,
         "avg_odds": statistics.mean(bet["odd"] for bet in bets) if bets else 0.0,
         "avg_edge": statistics.mean(bet["edge"] for bet in bets) if bets else 0.0,
         "brier_1x2": statistics.mean(brier_values) if brier_values else None,

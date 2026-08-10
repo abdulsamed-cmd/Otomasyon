@@ -165,8 +165,7 @@ def cmd_metrics(args: argparse.Namespace) -> int:
         print(
             f"  {kind:12} {item['coupons']:4}/{item['minimum_coupons']} kupon | "
             f"ROI %{item['roi']*100:+.1f} | "
-            f"%95 %{item['roi_ci95'][0]*100:+.1f}.."
-            f"%{item['roi_ci95'][1]*100:+.1f} | {status}"
+            f"{probability.interval_text(item['roi_ci95'])} | {status}"
         )
     print("\n=== Yüksek gol kategorileri ===")
     for item in goal_metrics.values():
@@ -299,8 +298,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print(
             f"  {market:15}: {values['bets']} seçim, "
             f"{values['wins']} kazanan, ROI %{values['roi'] * 100:.1f} "
-            f"(%95 %{values['roi_ci95'][0]*100:.1f}.."
-            f"%{values['roi_ci95'][1]*100:.1f})"
+            f"({probability.interval_text(values['roi_ci95'])})"
         )
     for outcome, values in report["outcome_breakdown"].items():
         if not values["bets"]:
@@ -308,8 +306,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print(
             f"    {outcome:13}: {values['bets']} seçim, "
             f"ROI %{values['roi']*100:.1f} "
-            f"(%95 %{values['roi_ci95'][0]*100:.1f}.."
-            f"%{values['roi_ci95'][1]*100:.1f})"
+            f"({probability.interval_text(values['roi_ci95'])})"
         )
     print(
         "  Kabul kapısı     : "
@@ -376,8 +373,7 @@ def cmd_clubelo_backtest(args: argparse.Namespace) -> int:
     )
     print(
         f"ROI %{report['roi']*100:.1f} "
-        f"(%95: %{report['roi_ci95'][0]*100:.1f} .. "
-        f"%{report['roi_ci95'][1]*100:.1f}), "
+        f"({probability.interval_text(report['roi_ci95'])}), "
         f"ort. oran {report['avg_odds']:.2f}, "
         f"ort. edge %{report['avg_edge']*100:.1f}"
     )
@@ -552,8 +548,7 @@ def cmd_shadow_metrics(args: argparse.Namespace) -> int:
     print(
         f"Tahmin {report['predictions']}, kazanan {report['wins']}, "
         f"ROI %{report['roi']*100:.1f}, "
-        f"%95 %{report['roi_ci95'][0]*100:.1f}.."
-        f"%{report['roi_ci95'][1]*100:.1f}"
+        f"{probability.interval_text(report['roi_ci95'])}"
     )
     print(
         f"Brier {report['brier'] if report['brier'] is not None else '—'} | "
@@ -593,8 +588,7 @@ def cmd_walk_forward_metrics(args: argparse.Namespace) -> int:
     print(
         f"İsabet %{report['hit_rate']*100:.1f}, "
         f"ort. oran {report['avg_odds']:.2f}, ROI %{report['roi']*100:.1f}, "
-        f"%95 %{report['roi_ci95'][0]*100:.1f}.."
-        f"%{report['roi_ci95'][1]*100:.1f}"
+        f"{probability.interval_text(report['roi_ci95'])}"
     )
     if report["model_brier"] is not None:
         print(

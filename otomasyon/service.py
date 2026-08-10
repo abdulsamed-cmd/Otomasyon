@@ -206,6 +206,10 @@ def record_result(db_path: str, result: settlement.MatchResult) -> None:
         db.save_result(result)
 
 
+roi_interval = probability.roi_interval
+roi_text = probability.roi_text
+
+
 def settlement_dedupe_key(coupon_id: int) -> str:
     return f"coupon_settled:{int(coupon_id)}"
 
@@ -403,16 +407,12 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
                     )
             odds.append(effective)
             profits.append(effective - 1.0 if coupon["status"] == "won" else -1.0)
-        roi = statistics.mean(profits) if profits else 0.0
-        margin = (
-            1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
-            if len(profits) > 1
-            else 0.0
-        )
+        roi, interval = roi_interval(profits)
         minimum = config.PERFORMANCE_GATE_MIN_COUPONS.get(kind, 200)
         output[kind] = {
             "coupons": len(selected),
             "won": sum(coupon["status"] == "won" for coupon in selected),
+            "lost": sum(coupon["status"] == "lost" for coupon in selected),
             "hit_rate": (
                 sum(coupon["status"] == "won" for coupon in selected)
                 / len(selected)
@@ -423,9 +423,13 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
             "avg_clv": statistics.mean(clv_values) if clv_values else None,
             "clv_samples": len(clv_values),
             "roi": roi,
-            "roi_ci95": (roi - margin, roi + margin),
+            "roi_ci95": interval,
             "minimum_coupons": minimum,
-            "gate_passed": len(selected) >= minimum and roi - margin > 0.0,
+            "gate_passed": (
+                len(selected) >= minimum
+                and interval is not None
+                and interval[0] > 0.0
+            ),
         }
     with Database(db_path) as db:
         rows = db.conn.execute(
@@ -702,21 +706,18 @@ def shadow_model_metrics(
         ** 2
         for row in rows
     ]
-    roi = statistics.mean(profits) if profits else 0.0
-    margin = (
-        1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
-        if len(profits) > 1
-        else 0.0
-    )
+    roi, interval = roi_interval(profits)
     return {
         "model_version": model_version,
         "predictions": len(rows),
         "wins": sum(row["result"] == "win" for row in rows),
         "roi": roi,
-        "roi_ci95": (roi - margin, roi + margin),
+        "roi_ci95": interval,
         "brier": statistics.mean(brier) if brier else None,
         "gate_passed": (
-            len(rows) >= config.MODEL_GATE_MIN_BETS and roi - margin > 0.0
+            len(rows) >= config.MODEL_GATE_MIN_BETS
+            and interval is not None
+            and interval[0] > 0.0
         ),
         "live_enabled": False,
     }
@@ -858,12 +859,7 @@ def walk_forward_metrics(
         all_rows = db.load_walk_forward_predictions(model_version)
     rows = [row for row in all_rows if row["edge"] >= min_edge]
     profits = [row["profit"] for row in rows]
-    roi = statistics.mean(profits) if profits else 0.0
-    margin = (
-        1.96 * statistics.stdev(profits) / math.sqrt(len(profits))
-        if len(profits) > 1
-        else 0.0
-    )
+    roi, interval = roi_interval(profits)
     model_brier = [
         (row["predicted_prob"] - row["won"]) ** 2 for row in rows
     ]
@@ -915,7 +911,7 @@ def walk_forward_metrics(
             statistics.mean(row["odd"] for row in rows) if rows else 0.0
         ),
         "roi": roi,
-        "roi_ci95": (roi - margin, roi + margin),
+        "roi_ci95": interval,
         "model_brier": (
             statistics.mean(model_brier) if model_brier else None
         ),
@@ -1322,6 +1318,28 @@ def archive_and_notify(
     return report
 
 
+def pending_coupon_summary(db_path: str) -> dict:
+    """Coupons still awaiting results.
+
+    Performance figures only move when a coupon settles, so an unchanged
+    report is expected while today's coupons are still running. Saying so
+    removes the ambiguity between "nothing happened" and "nothing updated".
+    """
+    with Database(db_path) as db:
+        rows = db.conn.execute(
+            """
+            SELECT for_date, COUNT(*) AS total FROM coupons
+            WHERE status='pending'
+              AND (notes IS NULL OR notes <> 'legacy_ineligible')
+            GROUP BY for_date ORDER BY for_date
+            """
+        ).fetchall()
+    return {
+        "coupons": sum(row["total"] for row in rows),
+        "dates": [row["for_date"] for row in rows],
+    }
+
+
 def host_downtime(db_path: str, *, since_ts: int | None = None) -> dict:
     """Windows in which the machine itself stopped running the automation.
 
@@ -1455,14 +1473,23 @@ def model_status_text(db_path: str) -> str:
         lines.extend(
             [
                 "",
-                f"{labels[kind]} — {item['coupons']}/{item['minimum_coupons']} sonuç",
                 (
-                    f"ROI {item['roi']*100:+.1f}% "
-                    f"[95% {item['roi_ci95'][0]*100:+.1f}%.."
-                    f"{item['roi_ci95'][1]*100:+.1f}%]"
+                    f"{labels[kind]} — {item['won']} tuttu / "
+                    f"{item['lost']} tutmadı "
+                    f"({item['coupons']} sonuçlandı, hedef "
+                    f"{item['minimum_coupons']})"
                 ),
+                roi_text(item["roi"], item["roi_ci95"]),
                 f"CLV: {clv} | Kapı: {'GEÇTİ' if item['gate_passed'] else 'BEKLİYOR'}",
             ]
+        )
+    pending = pending_coupon_summary(db_path)
+    if pending["coupons"]:
+        lines.append("")
+        lines.append(
+            f"Bekleyen: {pending['coupons']} kupon henüz sonuçlanmadı "
+            f"({', '.join(pending['dates'])}). Rakamlar bunlar "
+            "sonuçlanınca değişir."
         )
     lines.extend(
         [
@@ -1472,11 +1499,7 @@ def model_status_text(db_path: str) -> str:
                 f"{walk_forward['qualified_predictions']}/"
                 f"{walk_forward['all_predictions']} edge uygun"
             ),
-            (
-                f"ROI {walk_forward['roi']*100:+.1f}% "
-                f"[95% {walk_forward['roi_ci95'][0]*100:+.1f}%.."
-                f"{walk_forward['roi_ci95'][1]*100:+.1f}%]"
-            ),
+            roi_text(walk_forward["roi"], walk_forward["roi_ci95"]),
             (
                 f"Brier model/piyasa: {walk_forward['model_brier']:.4f}/"
                 f"{walk_forward['market_brier']:.4f}"
@@ -1486,11 +1509,7 @@ def model_status_text(db_path: str) -> str:
             "",
             f"xG gölge ({shadow['model_version']}) — {shadow['predictions']}/"
             f"{config.MODEL_GATE_MIN_BETS} sonuç",
-            (
-                f"ROI {shadow['roi']*100:+.1f}% "
-                f"[95% {shadow['roi_ci95'][0]*100:+.1f}%.."
-                f"{shadow['roi_ci95'][1]*100:+.1f}%]"
-            ),
+            roi_text(shadow["roi"], shadow["roi_ci95"]),
             (
                 f"Brier: {shadow['brier']:.3f}"
                 if shadow["brier"] is not None
@@ -1500,11 +1519,7 @@ def model_status_text(db_path: str) -> str:
             "",
             f"Gol+Elo gölge ({goal_shadow['model_version']}) — "
             f"{goal_shadow['predictions']}/{config.MODEL_GATE_MIN_BETS} sonuç",
-            (
-                f"ROI {goal_shadow['roi']*100:+.1f}% "
-                f"[95% {goal_shadow['roi_ci95'][0]*100:+.1f}%.."
-                f"{goal_shadow['roi_ci95'][1]*100:+.1f}%]"
-            ),
+            roi_text(goal_shadow["roi"], goal_shadow["roi_ci95"]),
             (
                 f"Brier: {goal_shadow['brier']:.3f}"
                 if goal_shadow["brier"] is not None
