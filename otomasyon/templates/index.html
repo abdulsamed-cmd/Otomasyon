@@ -34,10 +34,10 @@
           {{ 'Geçti' if item.gate_passed else 'Kanıt bekliyor' }}
         </span>
       </div>
-      <strong class="metric-number">{{ item.coupons }}</strong>
-      <span class="metric-label">sonuçlanan kupon / {{ item.minimum_coupons }} gerekli</span>
+      <strong class="metric-number">{{ item.matches }}</strong>
+      <span class="metric-label">sonuçlanan maç / {{ item.minimum_matches }} gerekli</span>
       <div class="metric-row">
-        <div><b>%{{ "%.1f"|format(item.hit_rate * 100) }}</b><span>İsabet</span></div>
+        <div><b>%{{ "%.1f"|format(item.match_hit_rate * 100) }}</b><span>Maç isabeti</span></div>
         <div>
           {% if item.system_size is defined %}
             <b>{{ item.system_size }}'li</b><span>İzlenen sistem</span>
@@ -54,7 +54,7 @@
         </div>
         <div><b class="{{ 'positive' if item.roi > 0 else 'negative' }}">%{{ "%+.1f"|format(item.roi * 100) }}</b><span>ROI</span></div>
       </div>
-      <div class="progress"><i style="width: {{ [item.coupons / item.minimum_coupons * 100, 100]|min }}%"></i></div>
+      <div class="progress"><i style="width: {{ [item.matches / item.minimum_matches * 100, 100]|min }}%"></i></div>
     </article>
     {% endfor %}
   </div>

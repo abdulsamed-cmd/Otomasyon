@@ -168,7 +168,10 @@ MODEL_GATE_MIN_ROI_CI_LOW = 0.0
 
 # Independent evidence gates. Main, alternative and surprise results are never
 # pooled because they represent different risk processes.
-PERFORMANCE_GATE_MIN_COUPONS = {
+# Evidence is counted in settled *matches*, not coupons. Each leg is one
+# prediction we made, so a 2-4 leg coupon contributes 2-4 data points and the
+# sample grows several times faster than one-per-day.
+PERFORMANCE_GATE_MIN_MATCHES = {
     "daily_main": 200,
     "daily_alt": 200,
     "surprise": 100,

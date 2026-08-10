@@ -384,7 +384,7 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
         if coupon.get("notes") != "legacy_ineligible"
     ]
     output = {}
-    kinds = set(config.PERFORMANCE_GATE_MIN_COUPONS) | {
+    kinds = set(config.PERFORMANCE_GATE_MIN_MATCHES) | {
         coupon["kind"] for coupon in coupons
     }
     for kind in sorted(kinds):
@@ -396,9 +396,16 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
         profits = []
         odds = []
         clv_values = []
+        # Each leg is one match prediction. Counting them is what makes the
+        # sample grow at match speed rather than one coupon per day.
+        match_total = 0
+        match_hits = 0
         for coupon in selected:
             effective = 1.0
             for leg in coupon["legs"]:
+                if leg["result"] in ("win", "lose"):
+                    match_total += 1
+                    match_hits += leg["result"] == "win"
                 if leg["result"] == "win":
                     effective *= leg["odd"]
                 if leg.get("closing_odd") and leg["closing_odd"] > 1.0:
@@ -408,11 +415,14 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
             odds.append(effective)
             profits.append(effective - 1.0 if coupon["status"] == "won" else -1.0)
         roi, interval = roi_interval(profits)
-        minimum = config.PERFORMANCE_GATE_MIN_COUPONS.get(kind, 200)
+        minimum = config.PERFORMANCE_GATE_MIN_MATCHES.get(kind, 200)
         output[kind] = {
             "coupons": len(selected),
             "won": sum(coupon["status"] == "won" for coupon in selected),
             "lost": sum(coupon["status"] == "lost" for coupon in selected),
+            "matches": match_total,
+            "match_hits": match_hits,
+            "match_hit_rate": (match_hits / match_total) if match_total else 0.0,
             "hit_rate": (
                 sum(coupon["status"] == "won" for coupon in selected)
                 / len(selected)
@@ -424,9 +434,9 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
             "clv_samples": len(clv_values),
             "roi": roi,
             "roi_ci95": interval,
-            "minimum_coupons": minimum,
+            "minimum_matches": minimum,
             "gate_passed": (
-                len(selected) >= minimum
+                match_total >= minimum
                 and interval is not None
                 and interval[0] > 0.0
             ),
@@ -446,15 +456,17 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
     total_stake = sum(row["columns"] * row["unit_stake"] for row in rows)
     total_profit = sum(row["profit"] for row in rows)
     surprise_roi = total_profit / total_stake if total_stake else 0.0
-    surprise_margin = (
-        1.96 * statistics.stdev(report_rois) / math.sqrt(len(report_rois))
-        if len(report_rois) > 1
-        else 0.0
-    )
-    minimum = config.PERFORMANCE_GATE_MIN_COUPONS["surprise"]
+    _, surprise_ci = roi_interval(report_rois)
+    minimum = config.PERFORMANCE_GATE_MIN_MATCHES["surprise"]
     output["surprise"] = {
         "coupons": len(rows),
         "won": sum(row["profit"] > 0 for row in rows),
+        "lost": sum(row["profit"] <= 0 for row in rows),
+        "matches": len(rows),
+        "match_hits": sum(row["profit"] > 0 for row in rows),
+        "match_hit_rate": (
+            sum(row["profit"] > 0 for row in rows) / len(rows) if rows else 0.0
+        ),
         "hit_rate": (
             sum(row["profit"] > 0 for row in rows) / len(rows) if rows else 0.0
         ),
@@ -462,13 +474,12 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
         "avg_clv": None,
         "clv_samples": 0,
         "roi": surprise_roi,
-        "roi_ci95": (
-            surprise_roi - surprise_margin,
-            surprise_roi + surprise_margin,
-        ),
-        "minimum_coupons": minimum,
+        "roi_ci95": surprise_ci,
+        "minimum_matches": minimum,
         "gate_passed": (
-            len(rows) >= minimum and surprise_roi - surprise_margin > 0.0
+            len(rows) >= minimum
+            and surprise_ci is not None
+            and surprise_ci[0] > 0.0
         ),
         "system_size": config.SURPRISE_TRACK_SYSTEM_SIZE,
     }
@@ -1318,6 +1329,52 @@ def archive_and_notify(
     return report
 
 
+def excluded_coupon_summary(db_path: str) -> dict:
+    """Decided coupons kept out of the figures, and why they existed.
+
+    Silently dropping them makes the totals disagree with what the user
+    watched happen, which reads as a counting bug rather than a deliberate
+    exclusion.
+    """
+    with Database(db_path) as db:
+        # Early runs saved the same day's coupon more than once. Counting rows
+        # would report more coupons than were ever built, so identical
+        # kind/date entries collapse to one.
+        rows = db.conn.execute(
+            """
+            SELECT status, COUNT(*) AS total FROM (
+                SELECT DISTINCT kind, for_date, status FROM coupons
+                WHERE notes='legacy_ineligible'
+                  AND status IN ('won','lost','void')
+            ) GROUP BY status
+            """
+        ).fetchall()
+    by_status = {row["status"]: row["total"] for row in rows}
+    return {
+        "coupons": sum(by_status.values()),
+        "won": by_status.get("won", 0),
+        "lost": by_status.get("lost", 0),
+    }
+
+
+def model_influence_text() -> str:
+    """State plainly whether the model picks the coupons yet.
+
+    The model is retrained every night regardless, but until its evidence gate
+    opens the daily coupons are still selected from bookmaker-implied fair
+    probabilities. Reporting training alone reads as if the model were already
+    choosing the selections.
+    """
+    if config.MODEL_LIVE_ENABLED:
+        return "Kupon seçimi: MODEL kullanılıyor"
+    return (
+        "Kupon seçimi: MODEL HENÜZ KULLANILMIYOR — kuponlar bahis "
+        "oranlarından türetilen adil olasılıkla kuruluyor. Model her gece "
+        "eğitiliyor ve tahminleri gölgede ölçülüyor; kanıt eşiği geçilince "
+        "devreye alınacak."
+    )
+
+
 def pending_coupon_summary(db_path: str) -> dict:
     """Coupons still awaiting results.
 
@@ -1459,6 +1516,7 @@ def model_status_text(db_path: str) -> str:
         )
     else:
         lines.append("Son eğitim: henüz kayıt yok")
+    lines.append(model_influence_text())
     labels = {
         "daily_main": "Ana kupon",
         "daily_alt": "Alternatif",
@@ -1474,14 +1532,25 @@ def model_status_text(db_path: str) -> str:
             [
                 "",
                 (
-                    f"{labels[kind]} — {item['won']} tuttu / "
-                    f"{item['lost']} tutmadı "
-                    f"({item['coupons']} sonuçlandı, hedef "
-                    f"{item['minimum_coupons']})"
+                    f"{labels[kind]} — kupon: {item['won']} tuttu / "
+                    f"{item['lost']} tutmadı"
                 ),
-                roi_text(item["roi"], item["roi_ci95"]),
-                f"CLV: {clv} | Kapı: {'GEÇTİ' if item['gate_passed'] else 'BEKLİYOR'}",
+                (
+                    f"  Maç tahmini: {item['match_hits']}/{item['matches']} "
+                    f"doğru (%{item['match_hit_rate']*100:.0f}) · "
+                    f"kanıt {item['matches']}/{item['minimum_matches']} maç"
+                ),
+                "  " + roi_text(item["roi"], item["roi_ci95"]),
+                f"  CLV: {clv} | Kapı: {'GEÇTİ' if item['gate_passed'] else 'BEKLİYOR'}",
             ]
+        )
+    excluded = excluded_coupon_summary(db_path)
+    if excluded["won"] or excluded["coupons"]:
+        lines.append("")
+        lines.append(
+            f"Not: {excluded['coupons']} eski kupon ({excluded['won']} tutan) "
+            "sayıma girmiyor — uygunluk kuralları öncesinde kurulmuşlardı "
+            "(hazırlık maçı vb.)."
         )
     pending = pending_coupon_summary(db_path)
     if pending["coupons"]:

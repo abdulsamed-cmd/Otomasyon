@@ -163,7 +163,7 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     for kind, item in by_kind.items():
         status = "GEÇTİ" if item["gate_passed"] else "BEKLİYOR"
         print(
-            f"  {kind:12} {item['coupons']:4}/{item['minimum_coupons']} kupon | "
+            f"  {kind:12} {item['matches']:4}/{item['minimum_matches']} mac | "
             f"ROI %{item['roi']*100:+.1f} | "
             f"{probability.interval_text(item['roi_ci95'])} | {status}"
         )

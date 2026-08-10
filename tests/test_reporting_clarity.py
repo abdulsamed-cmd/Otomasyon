@@ -72,8 +72,8 @@ def test_both_winning_coupons_are_reported_as_winning(tmp_path):
     assert split["daily_alt"]["won"] == 1
 
     text = service.model_status_text(path)
-    assert "Ana kupon — 1 tuttu / 0 tutmadı" in text
-    assert "Alternatif — 1 tuttu / 0 tutmadı" in text
+    assert "Ana kupon — kupon: 1 tuttu / 0 tutmadı" in text
+    assert "Alternatif — kupon: 1 tuttu / 0 tutmadı" in text
 
 
 def test_a_single_result_does_not_claim_a_precise_interval(tmp_path):
@@ -126,3 +126,77 @@ def test_interval_helpers_state_when_data_is_insufficient():
     assert probability.roi_interval([0.5])[1] is None
     assert "veri yetersiz" in probability.roi_text(1.0, None)
     assert "veri yetersiz" in probability.interval_text(None)
+
+
+def test_evidence_is_counted_in_matches_not_coupons():
+    """The 200 target is match predictions, so it grows several times a day.
+
+    Counting coupons meant one data point per day and roughly 200 days before
+    any conclusion. Each leg is a separate prediction and counts as one.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/matches.db"
+        with Database(path) as db:
+            db.save_events([_event(1), _event(2)])
+            coupon = Coupon(
+                kind="daily_main",
+                legs=[_coupon("daily_main", 1).legs[0], _leg_for(2)],
+            )
+            db.save_coupon(coupon, "2026-08-09")
+            db.save_result(MatchResult(1, 1, 0))
+            db.save_result(MatchResult(2, 5, 4))
+        service.settle_pending(path, None, notify=False)
+
+        item = service.metrics_by_kind(path)["daily_main"]
+
+        # One coupon, but two match predictions: one right, one wrong.
+        assert item["coupons"] == 1
+        assert item["matches"] == 2
+        assert item["match_hits"] == 1
+        assert item["minimum_matches"] == config.PERFORMANCE_GATE_MIN_MATCHES[
+            "daily_main"
+        ]
+        assert "Maç tahmini: 1/2 doğru" in service.model_status_text(path)
+
+
+def _leg_for(eid):
+    return Leg(
+        event_id=eid,
+        home=f"Ev{eid}",
+        away=f"Dep{eid}",
+        competition="Lig",
+        start_ts=1_786_197_600,
+        market_code=config.MARKET_OVER_UNDER,
+        market_name="Alt/Üst",
+        sov="3.5",
+        outcome_no=1,
+        outcome_name="Alt",
+        odd=2.0,
+        fair_prob=0.55,
+    )
+
+
+def test_report_states_whether_the_model_picks_the_coupons():
+    """Training alone reads as if the model were already choosing selections."""
+    text = service.model_influence_text()
+
+    assert "MODEL HENÜZ KULLANILMIYOR" in text
+    assert "oranlarından türetilen adil olasılıkla" in text
+
+
+def test_excluded_legacy_coupons_are_stated_not_hidden(tmp_path):
+    """Hidden exclusions make the totals look like a counting error."""
+    path = str(tmp_path / "legacy.db")
+    _settled_day(path, "2026-08-08", main_goals=(1, 0), alt_goals=(0, 0))
+    with Database(path) as db:
+        db.conn.execute("UPDATE coupons SET notes='legacy_ineligible'")
+        db.conn.commit()
+
+    summary = service.excluded_coupon_summary(path)
+    assert summary["coupons"] == 2
+    assert summary["won"] == 2
+    assert "2 eski kupon (2 tutan) sayıma girmiyor" in service.model_status_text(
+        path
+    )
