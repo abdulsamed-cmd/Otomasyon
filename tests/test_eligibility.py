@@ -2,6 +2,7 @@ from otomasyon.eligibility import (
     competition_exclusion_reason,
     is_daily_eligible,
     is_event_eligible,
+    team_exclusion_reason,
 )
 
 
@@ -27,3 +28,26 @@ def test_reserve_team_suffixes_are_excluded_inside_official_leagues():
     assert not is_event_eligible("Almanya 3. Lig", "Hoffenheim II", "Rostock")
     assert not is_event_eligible("Premier Lig", "Chelsea Academy", "Arsenal")
     assert is_event_eligible("Bundesliga", "Schalke 04", "Bayern Münih")
+
+
+def test_dutch_reserve_sides_are_excluded():
+    """"Jong <club>" sides carry no token the suffix rules would catch."""
+    for name in ("Jong AZ Alkmaar", "Jong PSV", "Jong Utrecht"):
+        assert team_exclusion_reason(name) is not None
+        assert not is_event_eligible("Hollanda 1. Lig", name, "Eindhoven")
+
+
+def test_senior_clubs_named_like_reserves_are_kept():
+    """Willem II plays in the Eredivisie; the suffix rule used to drop it."""
+    assert team_exclusion_reason("Willem II") is None
+    assert team_exclusion_reason("Juan Pablo II") is None
+    assert is_event_eligible("Hollanda Eredivisie", "Willem II", "Ajax")
+
+
+def test_reserve_suffixes_still_excluded():
+    for name in ("Porto B", "Schalke 04 II", "Hertha Berlin II"):
+        assert team_exclusion_reason(name) is not None
+
+
+def test_sub_age_groups_are_excluded():
+    assert team_exclusion_reason("Benfica Sub-23") is not None

@@ -49,6 +49,20 @@ def is_daily_eligible(competition_name: str) -> bool:
     return competition_exclusion_reason(competition_name) is None
 
 
+# Dutch reserve sides are named "Jong <club>" with no token the suffix rules
+# would catch, so they reach the daily coupon as if they were senior teams.
+_RESERVE_PREFIXES = ("jong ",)
+
+# Senior clubs whose real name ends the way a reserve side would. Without this
+# the suffix rule throws away legitimate top-flight fixtures.
+_SENIOR_DESPITE_SUFFIX = frozenset(
+    {
+        "willem ii",
+        "juan pablo ii",
+    }
+)
+
+
 def team_exclusion_reason(name: str) -> str | None:
     folded = _fold(name).strip()
     if any(
@@ -56,8 +70,12 @@ def team_exclusion_reason(name: str) -> str | None:
         for token in ("academy", "akademi", "reserves", "rezerv", "youth")
     ):
         return "development team"
-    if re.search(r"\b(?:u|under)[ -]?\d{2}\b", folded):
+    if folded.startswith(_RESERVE_PREFIXES):
+        return "reserve team prefix"
+    if re.search(r"\b(?:u|under|sub)[ -]?\d{2}\b", folded):
         return "age-group team"
+    if folded in _SENIOR_DESPITE_SUFFIX:
+        return None
     if re.search(r"(?:\s|-)(?:ii|b|2)$", folded):
         return "reserve team suffix"
     return None
