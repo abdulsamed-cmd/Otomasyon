@@ -68,30 +68,32 @@ DAILY_COUPON_MARKETS = (
 MARKET_MAX_MARGIN = 0.20
 
 # --- Coupon rules ----------------------------------------------------------
-# The coupon targets a ~2.00 return. The band is what the engine is allowed to
-# land on while it hunts for the highest win probability at that price.
-DAILY_MIN_TOTAL_ODDS = 1.85
-DAILY_MAX_TOTAL_ODDS = 2.15
-# One leg is allowed, and preferred: every additional leg multiplies another
-# market margin into the coupon, so at the same total odds a 2-leg build wins
-# far less often than a single. Measured on 75k archived matches, a single
-# selection priced 1.85-2.15 landed 41.6% of the time, while two legs of ~1.41
-# paying the same 2.00 landed 32.7%.
+# Each coupon is asked for the highest win probability it can reach at or above
+# a minimum payout. There is no upper bound and no preferred leg count: the
+# main coupon exists to land often, the alternative to reach a 2.00+ return, and
+# the search decides how many matches each of those takes.
+DAILY_MAIN_MIN_ODDS = 1.50
+DAILY_ALT_MIN_ODDS = 2.00
 DAILY_MIN_LEGS = 1
-DAILY_MAX_LEGS = 4
+DAILY_MAX_LEGS = 5
 
 # Sanity floor for a leg: below this the outcome is simply unlikely, whatever
 # the search thinks of it. It is deliberately low, because the objective
 # already punishes weak legs - a single leg paying 2.00 is a ~0.44 shot and
 # must stay eligible.
 LEG_MIN_FAIR_PROB = 0.35
-# A leg is useless outside this band: under the floor it barely moves the
-# total, over the ceiling it alone overshoots the target price.
+# Under this price a leg barely moves the total, so it only adds another market
+# margin. There is no ceiling: a single leg is allowed to carry a coupon.
 LEG_MIN_ODD = 1.15
-LEG_MAX_ODD = DAILY_MAX_TOTAL_ODDS
-# Triples/quads are searched over the top-N safest legs (perf guard). Singles
-# and pairs are always searched over the full pool.
-COMBO_CAP = 64
+LEG_MAX_ODD = 4.00
+# Singles and pairs are searched over the whole pool. Three legs and up are
+# searched over the likeliest legs only, because the number of combinations
+# explodes; the cap shrinks as the build grows so the work stays bounded.
+COMBO_CAPS = {3: 64, 4: 40, 5: 28}
+# How many candidate partners each leg keeps while pairing. One match can offer
+# a dozen legs, so this stays wide enough that discarding a whole match still
+# leaves a real partner behind.
+PAIR_SUFFIX_WIDTH = 16
 
 # --- Surprise lab ----------------------------------------------------------
 # High-goal category, mapped to (market_code, outcome_name, line).

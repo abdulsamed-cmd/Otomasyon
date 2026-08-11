@@ -37,28 +37,25 @@ def format_daily(coupons: dict, for_date: str) -> str:
     if not coupons.get("main") and not coupons.get("alt"):
         return (
             f"Günün kuponu ({for_date}) henüz hazır değil.\n"
-            f"{config.DAILY_MIN_TOTAL_ODDS:.2f}–{config.DAILY_MAX_TOTAL_ODDS:.2f} "
-            "bandında uygun kurgu bulunamadı."
+            f"En az {config.DAILY_MAIN_MIN_ODDS:.2f} ödeyen uygun kurgu "
+            "bulunamadı."
         )
     parts = [f"GÜNÜN DÜŞÜK RİSKLİ KUPONLARI ({for_date})", ""]
     parts.append(format_coupon("ANA KUPON", coupons.get("main")))
     parts.append("")
     parts.append(format_coupon("ALTERNATİF", coupons.get("alt")))
     parts.append("")
-    if any(
-        coupon.combined_prob < 0.5
-        for coupon in (coupons.get("main"), coupons.get("alt"))
-        if coupon
-    ):
+    main = coupons.get("main")
+    if main and main.combined_prob < 0.5:
         # Read off the coupon rather than asserted: at a payout this high the
         # market margin leaves no selection above 50%, so the pick is the less
-        # likely side by arithmetic, not by disagreeing with the market.
+        # likely side by arithmetic, not by disagreeing with the market. The
+        # alternative is a long shot on purpose, so it is not the warning here.
         parts.append(
-            "Not: Kupon piyasayı yenme iddiası taşımaz; seçimler piyasanın "
-            "kendi olasılıklarına göre sıralanır. Hedeflenen ödeme bu "
-            "seviyedeyken marj nedeniyle %50 üstü seçim kalmaz, bu yüzden "
-            "kupon piyasanın daha az ihtimal verdiği taraftadır. Daha sık "
-            "tutan kupon isteniyorsa daha düşük ödeme gerekir."
+            "Not: Ana kuponun ödemesi bu seviyedeyken marj nedeniyle %50 üstü "
+            "seçim kalmaz, bu yüzden kupon piyasanın daha az ihtimal verdiği "
+            "taraftadır. Daha sık tutan ana kupon isteniyorsa daha düşük ödeme "
+            "gerekir."
         )
     parts.append(
         "Not: Piyasa tabanlı deneme kuponudur; bağlamsal ROI modeli henüz "

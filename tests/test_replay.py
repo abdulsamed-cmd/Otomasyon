@@ -30,35 +30,37 @@ def _row(
     }
 
 
-def test_replay_uses_production_engine_and_settles_main_and_alternative():
-    history = [
-        # Only these two matches offer a selection priced inside the band, so
-        # they become the main and the alternative coupon respectively.
-        _row(0, 1, under=1.95, over=1.80),
+def _main_wins_alt_loses() -> list[dict]:
+    return [
+        # Cheapest price on the board, so the main coupon takes it - and one
+        # goal settles it as a winner.
+        _row(0, 1, under=1.50, over=2.60),
+        # The only selection that reaches 2.00, and three goals sink it.
         _row(1, 3, under=2.05, over=1.72),
-        _row(2, 3),
-        _row(3, 1),
+        _row(2, 3, under=1.95, over=1.80),
+        _row(3, 1, under=1.95, over=1.80),
     ]
+
+
+def test_replay_uses_production_engine_and_settles_main_and_alternative():
     report = replay_daily(
-        history, start_date="2026-03-10", end_date="2026-03-10"
+        _main_wins_alt_loses(), start_date="2026-03-10", end_date="2026-03-10"
     )
     assert report["method"] == "closing_odds_partial"
     assert report["main"]["coupons"] == 1
     assert report["main"]["won"] == 1
     assert report["main"]["average_legs"] == 1
+    assert report["main"]["average_odds"] == pytest.approx(1.50)
     assert report["alternative"]["coupons"] == 1
     assert report["alternative"]["lost"] == 1
-    assert report["combined"]["roi"] == pytest.approx((0.95 - 1.0) / 2)
+    assert report["alternative"]["average_odds"] == pytest.approx(2.05)
+    assert report["combined"]["roi"] == pytest.approx((0.50 - 1.0) / 2)
 
 
 def test_a_day_counts_once_however_many_of_its_coupons_landed():
-    history = [
-        _row(0, 1, under=1.95, over=1.80),  # main wins
-        _row(1, 3, under=2.05, over=1.72),  # alternative loses
-        _row(2, 3),
-        _row(3, 1),
-    ]
-    report = replay_daily(history, start_date="2026-03-10", end_date="2026-03-10")
+    report = replay_daily(
+        _main_wins_alt_loses(), start_date="2026-03-10", end_date="2026-03-10"
+    )
     any_hit = report["daily_any_hit"]
     assert report["combined"]["coupons"] == 2
     assert any_hit["days"] == 1
@@ -81,10 +83,10 @@ def test_a_day_whose_coupons_all_lost_scores_zero():
     }
 
 
-def test_a_cheaper_odds_band_buys_a_likelier_selection():
+def test_a_lower_floor_buys_a_likelier_selection():
     history = [
-        # 1.45 is the safer price, 1.95 the target price; only the requested
-        # band should be reachable.
+        # 1.45 is the safest price on the board but sits under the 1.50 floor,
+        # so the default run cannot reach it.
         _row(0, 1, under=1.45, over=2.70),
         _row(1, 1, under=1.95, over=1.80),
     ]
@@ -93,14 +95,11 @@ def test_a_cheaper_odds_band_buys_a_likelier_selection():
         history,
         start_date="2026-03-10",
         end_date="2026-03-10",
-        odds_band=(1.40, 1.60),
+        main_min_odds=1.40,
     )
-    assert default["odds_band"] == (
-        config.DAILY_MIN_TOTAL_ODDS,
-        config.DAILY_MAX_TOTAL_ODDS,
-    )
-    assert default["main"]["average_odds"] == pytest.approx(1.95)
-    assert cheaper["odds_band"] == (1.40, 1.60)
+    assert default["main_min_odds"] == config.DAILY_MAIN_MIN_ODDS
+    assert default["main"]["average_odds"] == pytest.approx(1.80)
+    assert cheaper["main_min_odds"] == 1.40
     assert cheaper["main"]["average_odds"] == pytest.approx(1.45)
 
 

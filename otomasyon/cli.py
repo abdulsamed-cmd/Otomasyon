@@ -424,19 +424,18 @@ def cmd_coupon_replay(args: argparse.Namespace) -> int:
         calibrated=args.calibrated,
         calibration_prior=args.calibration_prior,
         min_expected_value=args.min_ev,
-        odds_band=(
-            (args.min_odds, args.max_odds)
-            if args.min_odds is not None and args.max_odds is not None
-            else None
-        ),
+        main_min_odds=args.main_min_odds,
+        alt_min_odds=args.alt_min_odds,
     )
     print("=== Günlük kupon motoru tarihsel replay ===")
     print(
         "Yöntem: kapanış oranı / kısmi pazar "
         "(1X2 + Alt/Üst 2.5; 10:00 anlık oranı değildir)"
     )
-    band = report["odds_band"]
-    print(f"Oran bandı: {band[0]:.2f} - {band[1]:.2f}")
+    print(
+        f"Alt sınır: ana {report['main_min_odds']:.2f} / "
+        f"alternatif {report['alt_min_odds']:.2f}"
+    )
     print(
         "Olasılık: "
         + (
@@ -826,14 +825,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum estimated coupon EV (e.g. 0 for non-negative)",
     )
     p_replay.add_argument(
-        "--min-odds",
+        "--main-min-odds",
         type=float,
-        help="Override the coupon odds band floor (use with --max-odds)",
+        help="Override the minimum payout of the main coupon",
     )
     p_replay.add_argument(
-        "--max-odds",
+        "--alt-min-odds",
         type=float,
-        help="Override the coupon odds band ceiling (use with --min-odds)",
+        help="Override the minimum payout of the alternative coupon",
     )
     p_replay.set_defaults(func=cmd_coupon_replay)
 

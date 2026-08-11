@@ -179,10 +179,14 @@ def replay_daily(
     calibrated: bool = False,
     calibration_prior: float = 100.0,
     min_expected_value: float | None = None,
-    odds_band: tuple[float, float] | None = None,
+    main_min_odds: float | None = None,
+    alt_min_odds: float | None = None,
 ) -> dict:
     """Generate and settle main/alternative coupons for every calendar day."""
-    band = odds_band or engine.default_odds_band()
+    main_floor = (
+        config.DAILY_MAIN_MIN_ODDS if main_min_odds is None else main_min_odds
+    )
+    alt_floor = config.DAILY_ALT_MIN_ODDS if alt_min_odds is None else alt_min_odds
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
     probability_provider = None
@@ -220,7 +224,8 @@ def replay_daily(
             now=now,
             probability_provider=probability_provider,
             min_expected_value=min_expected_value,
-            odds_band=band,
+            main_min_odds=main_floor,
+            alt_min_odds=alt_floor,
         )
         if coupons["main"]:
             main_results.append(
@@ -247,7 +252,8 @@ def replay_daily(
         "calibrated": calibrated,
         "calibration_prior": calibration_prior if calibrated else None,
         "min_expected_value": min_expected_value,
-        "odds_band": band,
+        "main_min_odds": main_floor,
+        "alt_min_odds": alt_floor,
         "main": _summary(main_results, total_days),
         "alternative": _summary(alt_results, total_days),
         "combined": _summary(combined, total_days * 2),

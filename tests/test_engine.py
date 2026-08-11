@@ -47,8 +47,6 @@ def _ou_event(event_id: int, alt_odd: float, ust_odd: float) -> NormalizedEvent:
 
 
 def _events():
-    # Events 2 and 3 offer a selection priced inside the target band; events 1
-    # and 4 only offer legs that need a partner.
     return [
         _ou_event(1, 1.60, 2.20),
         _ou_event(2, 1.95, 1.80),
@@ -57,29 +55,40 @@ def _events():
     ]
 
 
-def test_main_coupon_lands_in_the_odds_band_with_one_selection_per_match():
+def test_main_coupon_clears_its_floor_with_one_selection_per_match():
     main = engine.build_daily_coupons(_events(), now=NOW)["main"]
     assert main is not None
     assert config.DAILY_MIN_LEGS <= len(main.legs) <= config.DAILY_MAX_LEGS
-    assert config.DAILY_MIN_TOTAL_ODDS <= main.total_odds <= config.DAILY_MAX_TOTAL_ODDS
+    assert main.total_odds >= config.DAILY_MAIN_MIN_ODDS
     assert len(main.event_ids) == len(main.legs)
     assert all(leg.fair_prob >= config.LEG_MIN_FAIR_PROB for leg in main.legs)
 
 
-def test_alternative_is_disjoint_from_main():
+def test_alternative_reaches_a_higher_payout_on_different_matches():
     coupons = engine.build_daily_coupons(_events(), now=NOW)
     main, alt = coupons["main"], coupons["alt"]
     assert main is not None and alt is not None
     assert main.event_ids.isdisjoint(alt.event_ids)
-    assert config.DAILY_MIN_TOTAL_ODDS <= alt.total_odds <= config.DAILY_MAX_TOTAL_ODDS
+    assert alt.total_odds >= config.DAILY_ALT_MIN_ODDS
+    # The alternative buys a bigger payout, so it must be the longer shot.
+    assert alt.combined_prob < main.combined_prob
 
 
-def test_main_takes_the_likeliest_selection_priced_in_the_band():
+def test_main_takes_the_likeliest_selection_that_clears_the_floor():
     main = engine.build_daily_coupons(_events(), now=NOW)["main"]
-    # Event 2's "Alt" at 1.95 is the most likely leg that reaches the band on
-    # its own; event 3's 2.05 is the runner-up and goes to the alternative.
-    assert main.event_ids == {2}
-    assert main.legs[0].odd == 1.95
+    # 1.60 is the cheapest price at or above the 1.50 floor, and therefore the
+    # likeliest single available; nothing pricier and no pair can beat it.
+    assert main.event_ids == {1}
+    assert main.legs[0].odd == 1.60
+
+
+def test_no_upper_bound_stops_a_coupon_from_paying_more_than_asked():
+    # The favourite sits under the floor, so the only selection that clears it
+    # pays 2.60 - well past what was asked for, and still accepted.
+    events = [_ou_event(1, 1.45, 2.60)]
+    main = engine.build_daily_coupons(events, now=NOW, main_min_odds=1.50)["main"]
+    assert main is not None
+    assert main.total_odds == 2.60
 
 
 def test_single_leg_is_preferred_over_a_pair_paying_the_same():
@@ -91,11 +100,16 @@ def test_single_leg_is_preferred_over_a_pair_paying_the_same():
     assert main.combined_prob > 0.45
 
 
-def test_falls_back_to_a_pair_when_no_single_leg_reaches_the_band():
+def test_a_pair_wins_when_every_single_at_that_price_is_a_longshot():
+    # Each match is a heavy favourite priced under the floor, so reaching the
+    # floor alone means buying the outsider. Two favourites together clear it
+    # and land far more often.
     events = [_ou_event(1, 1.45, 2.55), _ou_event(2, 1.40, 2.75), _ou_event(3, 1.30, 3.20)]
     main = engine.build_daily_coupons(events, now=NOW)["main"]
     assert len(main.legs) == 2
-    assert config.DAILY_MIN_TOTAL_ODDS <= main.total_odds <= config.DAILY_MAX_TOTAL_ODDS
+    assert main.total_odds >= config.DAILY_MAIN_MIN_ODDS
+    assert all(leg.outcome_name == "Alt" for leg in main.legs)
+    assert main.combined_prob > 0.45
 
 
 def test_cumulative_margin_grows_with_every_extra_leg():

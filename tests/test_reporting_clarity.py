@@ -299,8 +299,8 @@ def test_an_underdog_coupon_says_it_is_not_beating_the_market():
     text = formatting.format_daily(
         {"main": _coupon_at(0.457, 1.85), "alt": None}, "2026-08-11"
     )
-    assert "piyasayı yenme iddiası taşımaz" in text
     assert "daha az ihtimal verdiği taraftadır" in text
+    assert "daha düşük ödeme" in text
 
 
 def test_a_favourite_coupon_drops_the_underdog_warning():
