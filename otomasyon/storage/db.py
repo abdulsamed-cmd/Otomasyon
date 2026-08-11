@@ -366,16 +366,20 @@ class Database:
         self.conn.commit()
         return coupon_id
 
-    def pending_daily_coupons(self, for_date: str) -> dict[str, list[dict]]:
+    def daily_coupons_of_record(self, for_date: str) -> dict[str, list[dict]]:
         """The day's coupons of record, keyed by kind, newest first.
 
         This is what the reader was handed, as opposed to what a fresh build
         would produce a minute later at slightly different prices.
+
+        Being superseded is the only way to stop being the coupon of record.
+        A coupon that has been settled is still the one the reader is holding -
+        winning is not a way of ceasing to have been today's coupon.
         """
         coupons = self.conn.execute(
             """
             SELECT id, kind FROM coupons
-            WHERE for_date=? AND status='pending'
+            WHERE for_date=? AND status<>'superseded'
               AND kind IN ('daily_main','daily_alt')
             ORDER BY id DESC
             """,

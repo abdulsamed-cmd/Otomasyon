@@ -147,6 +147,35 @@ def test_a_coupon_that_only_reprices_is_not_sent_again(tmp_path, monkeypatch):
     assert len(telegram.sent) == 1
 
 
+def test_a_coupon_that_has_been_settled_is_not_announced_as_replaced(
+    tmp_path, monkeypatch
+):
+    # Winning is not a way of ceasing to have been today's coupon. Dropping a
+    # settled coupon from the record would leave the day looking half-empty,
+    # and the reader would be told their winning slip had been retired.
+    path = str(tmp_path / "settled.db")
+    _chat(path)
+    telegram = Telegram()
+    due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+
+    _stub_build(monkeypatch, _coupons(event_id=1))
+    assert service.push_daily(path, telegram, now=due) == "123"
+
+    with Database(path) as db:
+        db.conn.execute(
+            "UPDATE coupons SET status='won' WHERE kind='daily_main' AND for_date=?",
+            ("2026-08-09",),
+        )
+        db.conn.commit()
+
+    record = service.coupons_of_record(path, "2026-08-09")
+    assert record["main"] is not None
+
+    later = datetime(2026, 8, 9, 18, 30, tzinfo=config.TIMEZONE)
+    assert service.push_daily(path, telegram, now=later) is None
+    assert len(telegram.sent) == 1
+
+
 def test_a_revision_keeps_its_own_receipt_alongside_the_morning_push(
     tmp_path, monkeypatch
 ):

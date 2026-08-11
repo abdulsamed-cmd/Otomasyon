@@ -75,7 +75,7 @@ def _persist_daily(
 def coupons_of_record(db_path: str, for_date: str) -> dict:
     """Rebuild the day's stored coupons as the objects the formatter expects."""
     with Database(db_path) as db:
-        stored = db.pending_daily_coupons(for_date)
+        stored = db.daily_coupons_of_record(for_date)
     out: dict[str, engine.Coupon | None] = {"main": None, "alt": None}
     for kind, legs in stored.items():
         if not legs:
