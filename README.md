@@ -239,6 +239,34 @@ Eylül 2025 – Ağustos 2026 replay'inde motorun eski hâli ana kuponda `%40,6`
 isabet ve günlerin `%55,7`'sinde "en az biri tuttu" verirken, yeni hâli
 `%46,0` ve `%64,7` veriyor.
 
+### Hedef fiyat: ürünün asıl ayarı
+
+Motor bant içinde her zaman **tabana** oturur, çünkü bant içinde tutma
+olasılığı fiyatla birlikte tekdüze düşer. Yani bant bir aralık değil, tek bir
+karardır: taban fiyat ne ise ürün odur.
+
+Arşivdeki 37 bin tek bacaklık seçimde ölçülen denge:
+
+| taban | gerçek tutma | yatırılan paranın geri dönüşü |
+| ----- | ------------ | ----------------------------- |
+| 1.40  | %56,4        | %82,9                         |
+| 1.60  | %49,4        | %82,7                         |
+| 1.85  | %43,0        | %82,6                         |
+| 2.20  | %35,7        | %81,2                         |
+
+Kritik olan sağ sütun: geri dönüş her fiyatta aynı. Pahalı fiyat "daha
+değerli" değil; taban yalnızca tutma sıklığı ile ödeme büyüklüğü arasında
+seçim yaptırır. Aynı seçim replay'de gün bazında da görünüyor — `1.85–2.15`
+günlerin `%64,7`'sinde en az bir kupon tutturuyor, `1.40–1.60` ise `%73,9`.
+
+Bu bir ölçüm sorusu değil tercih sorusudur, o yüzden varsayılan `1.85–2.15`
+bırakıldı. Kendi tercihini ölçmek için:
+
+```bash
+python3 -m otomasyon.cli coupon-replay --start 2025-09-01 --end 2026-08-09 \
+  --min-odds 1.40 --max-odds 1.60
+```
+
 Havuz yalnız ucuz ve sonuçlandırabildiğimiz pazarlardan beslenir: canlı
 bültende Maç Sonucu, Alt/Üst, Karşılıklı Gol ve Çifte Şans `%18` marjla
 fiyatlanırken kombinasyon pazarları (skor+gol, handikap, İY/MS, gol bandı)
