@@ -227,23 +227,23 @@ dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmad
 
 ### Kupon nasıl kuruluyor
 
-Motor bir hedef fiyatı (`1.85–2.15`) alır ve o fiyatı **en yüksek tutma
-olasılığıyla** veren kurguyu arar. Bacak sayısı bir ayar değil, bu aramanın
-sonucudur: her ek bacak kupona bir pazar marjı daha ekler, bu yüzden aynı
-getiride kısa kupon her zaman daha sık tutar. Arama bu nedenle bandı
-yakalayabilen en küçük bacak sayısında durur.
+Her kupona tek bir soru soruluyor: **en az şu kadar ödeyen kurgular arasında
+en olası olan hangisi?** Ana kupon en az `1.50`, alternatif en az `2.00`
+ödemek zorunda; üst sınır yok. Bacak sayısı `1`'den `5`'e kadar serbest ve her
+biri ayrı ayrı aranıp karşılaştırılıyor — kısa kupon önce denenip orada
+durulmuyor.
 
-Ölçüm bunu doğruluyor. Arşivdeki 75 bin maçta `1.85–2.15` fiyatlı tek bir
+Pratikte tek bacak çoğu zaman kazanıyor, ama bu bir kural değil ölçüm sonucu:
+her ek bacak kupona bir pazar marjı daha ekler, bu yüzden aynı ödemede uzun
+kupon daha seyrek tutar. Arşivdeki 75 bin maçta `1.85–2.15` fiyatlı tek bir
 seçim `%41,6` tutarken, aynı 2.00'ı veren iki `~1.41` bacak `%32,7` tutuyor.
-Eylül 2025 – Ağustos 2026 replay'inde motorun eski hâli ana kuponda `%40,6`
-isabet ve günlerin `%55,7`'sinde "en az biri tuttu" verirken, yeni hâli
-`%46,0` ve `%64,7` veriyor.
+Her bacak fiyatının tabanın altında kaldığı günlerde ise arama kendiliğinden
+çoklu bacağa geçiyor.
 
 ### Hedef fiyat: ürünün asıl ayarı
 
-Motor bant içinde her zaman **tabana** oturur, çünkü bant içinde tutma
-olasılığı fiyatla birlikte tekdüze düşer. Yani bant bir aralık değil, tek bir
-karardır: taban fiyat ne ise ürün odur.
+Motor her zaman **tabana** oturur, çünkü tutma olasılığı fiyatla birlikte
+tekdüze düşer. Yani taban fiyat bir aralık değil, ürünün kendisidir.
 
 Arşivdeki 37 bin tek bacaklık seçimde ölçülen denge:
 
@@ -256,15 +256,11 @@ Arşivdeki 37 bin tek bacaklık seçimde ölçülen denge:
 
 Kritik olan sağ sütun: geri dönüş her fiyatta aynı. Pahalı fiyat "daha
 değerli" değil; taban yalnızca tutma sıklığı ile ödeme büyüklüğü arasında
-seçim yaptırır. Aynı seçim replay'de gün bazında da görünüyor — `1.85–2.15`
-günlerin `%64,7`'sinde en az bir kupon tutturuyor, `1.40–1.60` ise `%73,9`.
-
-Bu bir ölçüm sorusu değil tercih sorusudur, o yüzden varsayılan `1.85–2.15`
-bırakıldı. Kendi tercihini ölçmek için:
+seçim yaptırır. Tabanı ölçmek için:
 
 ```bash
 python3 -m otomasyon.cli coupon-replay --start 2025-09-01 --end 2026-08-09 \
-  --min-odds 1.40 --max-odds 1.60
+  --main-min-odds 1.40 --alt-min-odds 2.00
 ```
 
 Havuz yalnız ucuz ve sonuçlandırabildiğimiz pazarlardan beslenir: canlı
