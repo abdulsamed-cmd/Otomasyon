@@ -311,10 +311,13 @@ class Database:
         now = now or int(time.time())
         cur = self.conn.cursor()
         if coupon.kind in ("daily_main", "daily_alt"):
+            # A superseded coupon is no longer the day's coupon, so it must not
+            # answer for one; otherwise the replacement is silently discarded.
             existing = cur.execute(
                 """
                 SELECT id FROM coupons
                 WHERE kind=? AND for_date=?
+                  AND (notes IS NULL OR notes <> 'superseded')
                 ORDER BY id LIMIT 1
                 """,
                 (coupon.kind, for_date),
@@ -347,6 +350,40 @@ class Database:
             )
         self.conn.commit()
         return coupon_id
+
+    def supersede_daily_coupons(self, for_date: str, *, now: int | None = None) -> int:
+        """Retire a day's still-pending daily coupons before they are replaced.
+
+        Only coupons whose matches have all yet to start may be retired: once
+        a leg has kicked off, the coupon has been played and rewriting it
+        would be rewriting history.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT c.id, MIN(e.start_ts) AS first_start
+            FROM coupons c
+            JOIN coupon_legs cl ON cl.coupon_id=c.id
+            LEFT JOIN events e ON e.id=cl.event_id
+            WHERE c.for_date=? AND c.status='pending'
+              AND c.kind IN ('daily_main','daily_alt')
+              AND (c.notes IS NULL OR c.notes <> 'superseded')
+            GROUP BY c.id
+            """,
+            (for_date,),
+        ).fetchall()
+        now = now or int(time.time())
+        retired = [
+            row["id"]
+            for row in rows
+            if row["first_start"] is not None and row["first_start"] > now
+        ]
+        for coupon_id in retired:
+            self.conn.execute(
+                "UPDATE coupons SET status='void', notes='superseded' WHERE id=?",
+                (coupon_id,),
+            )
+        self.conn.commit()
+        return len(retired)
 
     def save_surprise_report(
         self, report, period_key: str, *, now: int | None = None

@@ -45,7 +45,9 @@ def get_live_events(force: bool = False):
     return _cache["events"], _cache["competitions"]
 
 
-def daily_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
+def daily_text(
+    db_path: str = config.DB_PATH, *, save: bool = True, rebuild: bool = False
+) -> str:
     events, competitions = get_live_events()
     now = datetime.now(tz=config.TIMEZONE)
     coupons = engine.build_daily_coupons(
@@ -56,6 +58,9 @@ def daily_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
     for_date = now.strftime("%Y-%m-%d")
 
     if save:
+        if rebuild:
+            with Database(db_path) as db:
+                db.supersede_daily_coupons(for_date)
         with Database(db_path) as db:
             db.upsert_competitions(competitions)
             db.save_events(events)
@@ -342,6 +347,12 @@ def deliver_pending_notifications(db_path: str, client) -> dict:
     return drain_notifications(db_path, client)
 
 
+# Coupons carrying one of these notes were never part of the live process and
+# must stay out of every performance figure: the first predates the current
+# eligibility rules, the second was replaced before any of its matches began.
+EXCLUDED_COUPON_NOTES = frozenset({"legacy_ineligible", "superseded"})
+
+
 def metrics(db_path: str) -> dict:
     """Aggregate performance over decided coupons (flat 1-unit stake)."""
     with Database(db_path) as db:
@@ -350,7 +361,7 @@ def metrics(db_path: str) -> dict:
     coupons = [
         coupon
         for coupon in coupons
-        if coupon.get("notes") != "legacy_ineligible"
+        if coupon.get("notes") not in EXCLUDED_COUPON_NOTES
     ]
     played = [c for c in coupons if c["status"] in ("won", "lost")]
     won = [c for c in played if c["status"] == "won"]
@@ -386,7 +397,7 @@ def metrics_by_kind(db_path: str) -> dict[str, dict]:
     coupons = [
         coupon
         for coupon in coupons
-        if coupon.get("notes") != "legacy_ineligible"
+        if coupon.get("notes") not in EXCLUDED_COUPON_NOTES
     ]
     output = {}
     kinds = set(config.PERFORMANCE_GATE_MIN_MATCHES) | {
@@ -1396,7 +1407,7 @@ def pending_coupon_summary(db_path: str) -> dict:
             """
             SELECT for_date, COUNT(*) AS total FROM coupons
             WHERE status='pending'
-              AND (notes IS NULL OR notes <> 'legacy_ineligible')
+              AND (notes IS NULL OR notes NOT IN ('legacy_ineligible','superseded'))
             GROUP BY for_date ORDER BY for_date
             """
         ).fetchall()

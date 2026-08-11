@@ -1,9 +1,13 @@
-from otomasyon import config, service
+from datetime import timedelta
+
+from otomasyon import config, engine, service
 from otomasyon.engine import Coupon, Leg
 from otomasyon.iddaa.normalize import NormalizedEvent
 from otomasyon.settlement import MatchResult
 from otomasyon.storage import Database
 from otomasyon.results.mackolik import SourceMatch
+
+from .test_engine import NOW, _ou_event
 
 
 def _event(eid, home, away):
@@ -153,3 +157,43 @@ def test_failed_result_fetch_does_not_start_rate_limit(tmp_path):
         service.auto_results(path, force=True, result_client=Failing())
     with Database(path) as db:
         assert db.get_setting("last_result_poll_ts") is None
+
+
+def test_a_published_coupon_can_be_replaced_only_before_kick_off(tmp_path):
+    """Rebuilding must retire the old coupon, not stack a second one on it."""
+    path = str(tmp_path / "supersede.db")
+    now_ts = int(NOW.timestamp())
+    future = _ou_event(710, 1.95, 1.80)
+    future.start_ts = now_ts + 7200
+    started = _ou_event(711, 1.95, 1.80)
+    started.start_ts = now_ts - 600
+
+    with Database(path) as db:
+        db.upsert_competitions({1: {"name": "Test Lig", "country_code": "TR"}})
+        db.save_events([future, started], now=now_ts)
+        upcoming = engine.build_daily_coupons([future], now=NOW)["main"]
+        running = engine.build_daily_coupons(
+            [started], now=NOW - timedelta(hours=3)
+        )["main"]
+        running.kind = "daily_alt"
+        upcoming_id = db.save_coupon(upcoming, "2026-08-08", now=now_ts)
+        running_id = db.save_coupon(running, "2026-08-08", now=now_ts)
+
+        assert db.supersede_daily_coupons("2026-08-08", now=now_ts) == 1
+
+        rows = {
+            row["id"]: row
+            for row in db.conn.execute("SELECT id, status, notes FROM coupons")
+        }
+        assert rows[upcoming_id]["notes"] == "superseded"
+        assert rows[upcoming_id]["status"] == "void"
+        assert rows[running_id]["notes"] is None
+        assert rows[running_id]["status"] == "pending"
+
+        # The retired coupon no longer answers for the day, so a replacement
+        # is stored instead of being collapsed into it.
+        replacement_id = db.save_coupon(upcoming, "2026-08-08", now=now_ts)
+        assert replacement_id != upcoming_id
+
+    assert service.metrics_by_kind(path)["daily_main"]["coupons"] == 0
+    assert service.pending_coupon_summary(path)["coupons"] == 2

@@ -37,7 +37,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 def cmd_coupon(args: argparse.Namespace) -> int:
     print("Bülten çekiliyor...")
-    text = service.daily_text(args.db, save=not args.no_save)
+    text = service.daily_text(
+        args.db, save=not args.no_save, rebuild=args.rebuild
+    )
     print("\n" + text)
     if not args.no_save:
         print("\n(Kuponlar takip için veritabanına kaydedildi.)")
@@ -679,6 +681,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_coupon = sub.add_parser("coupon", help="Build today's low-risk coupons")
     p_coupon.add_argument("--no-save", action="store_true", help="Do not persist")
+    p_coupon.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Replace today's coupons if none of their matches have started",
+    )
     p_coupon.set_defaults(func=cmd_coupon)
 
     p_surprise = sub.add_parser("surprise", help="Build the surprise-lab report")
