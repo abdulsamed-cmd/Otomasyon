@@ -2093,6 +2093,93 @@ def auto_model_refresh(
     }
 
 
+def collect_weather(
+    db_path: str,
+    *,
+    fotmob_client=None,
+    weather_client=None,
+    now: datetime | None = None,
+    venue_limit: int = 60,
+    horizon_days: int = 3,
+) -> dict:
+    """Learn where today's teams play, then what the sky will do there.
+
+    Venues are resolved once per team and reused forever after, so a run that
+    has seen a team before spends nothing on it. Weather is refetched for the
+    days ahead because a forecast changes right up to kick-off.
+    """
+    from .fotmob import FotMobClient
+    from .results.matcher import normalize_team
+    from .weather import OpenMeteoClient, Venue, venue_from_match_details
+
+    fotmob_client = fotmob_client or FotMobClient()
+    weather_client = weather_client or OpenMeteoClient()
+    now = now or datetime.now(tz=config.TIMEZONE)
+    today = now.date()
+    report = {"resolved": 0, "already_known": 0, "days": 0, "errors": []}
+
+    with Database(db_path) as db:
+        known = db.load_venues()
+
+    playing: set[str] = set()
+    wanted: dict[str, int] = {}
+    for offset in range(horizon_days):
+        day = today + timedelta(days=offset)
+        try:
+            fixtures = fotmob_client.fetch_date(day)
+        except Exception as exc:  # noqa: BLE001
+            report["errors"].append({"scope": f"fixtures:{day}", "error": str(exc)})
+            continue
+        for fixture in fixtures:
+            key = normalize_team(fixture.home)
+            if not key:
+                continue
+            playing.add(key)
+            if key not in known and key not in wanted:
+                wanted[key] = fixture.match_id
+    report["already_known"] = len(known)
+    report["playing"] = len(playing)
+
+    resolved: list[Venue] = []
+    for key, match_id in list(wanted.items())[:venue_limit]:
+        try:
+            payload = fotmob_client._get("matchDetails", {"matchId": match_id})
+        except Exception as exc:  # noqa: BLE001
+            report["errors"].append({"scope": f"venue:{key}", "error": str(exc)})
+            continue
+        venue = venue_from_match_details(key, payload, match_id)
+        if venue:
+            resolved.append(venue)
+    if resolved:
+        with Database(db_path) as db:
+            db.save_venues(resolved)
+    report["resolved"] = len(resolved)
+
+    with Database(db_path) as db:
+        venues = db.load_venues()
+        observations = []
+        for key in sorted(playing & venues.keys()):
+            row = venues[key]
+            try:
+                observations.extend(
+                    weather_client.forecast(
+                        Venue(
+                            team_key=key,
+                            latitude=row["latitude"],
+                            longitude=row["longitude"],
+                        ),
+                        days=horizon_days,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                report["errors"].append({"scope": f"weather:{key}", "error": str(exc)})
+            time.sleep(config.WEATHER_REQUEST_GAP)
+        if observations:
+            db.save_venue_weather(observations)
+        report["days"] = len(observations)
+    return report
+
+
 def refresh_calibration(
     db_path: str, *, history: list[dict] | None = None, now_ts: int | None = None
 ) -> dict:
@@ -2100,10 +2187,11 @@ def refresh_calibration(
     from .calibration import fit_calibration
 
     now_ts = now_ts or int(datetime.now(tz=config.TIMEZONE).timestamp())
-    if history is None:
-        with Database(db_path) as db:
+    with Database(db_path) as db:
+        if history is None:
             history = db.load_historical_matches(before_ts=now_ts)
-    report = fit_calibration(history, now_ts)
+        weather = db.load_venue_weather() or None
+    report = fit_calibration(history, now_ts, weather)
     report["fitted_ts"] = now_ts
     with Database(db_path) as db:
         db.set_setting("model_calibration", json.dumps(report))

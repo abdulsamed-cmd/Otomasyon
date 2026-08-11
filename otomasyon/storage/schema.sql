@@ -557,3 +557,26 @@ CREATE TABLE IF NOT EXISTS surprise_scenarios (
     PRIMARY KEY (report_id, system_size),
     FOREIGN KEY (report_id) REFERENCES surprise_reports(id) ON DELETE CASCADE
 );
+
+-- Where a team plays, resolved once from FotMob. Weather is a property of a
+-- place and a day, so the venue is what makes it lookupable.
+CREATE TABLE IF NOT EXISTS venues (
+    team_key      TEXT PRIMARY KEY,
+    stadium       TEXT,
+    city          TEXT,
+    country       TEXT,
+    latitude      REAL NOT NULL,
+    longitude     REAL NOT NULL,
+    source_match  INTEGER,
+    updated_ts    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS venue_weather (
+    team_key      TEXT NOT NULL,
+    weather_date  TEXT NOT NULL,
+    precipitation REAL,
+    wind_speed    REAL,
+    fetched_ts    INTEGER NOT NULL,
+    PRIMARY KEY (team_key, weather_date),
+    FOREIGN KEY (team_key) REFERENCES venues(team_key) ON DELETE CASCADE
+);

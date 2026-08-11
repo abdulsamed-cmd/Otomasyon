@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from . import config, probability
@@ -181,15 +182,29 @@ class PooledFit:
     market_logloss: float
     model_logloss: float
     pooled_logloss: float
+    context_names: tuple[str, ...] = ()
+    context_weights: tuple[float, ...] = ()
+    context_logloss: float | None = None
 
-    def blend(self, market_prob: float, model_prob: float | None) -> float:
+    def blend(
+        self,
+        market_prob: float,
+        model_prob: float | None,
+        context: Sequence[float] | None = None,
+    ) -> float:
         if model_prob is None:
             model_prob = market_prob
-        return _sigmoid(
+        score = (
             self.intercept
             + self.market_weight * _logit(market_prob)
             + self.model_weight * _logit(model_prob)
         )
+        if context and self.context_weights:
+            score += sum(
+                weight * value
+                for weight, value in zip(self.context_weights, context)
+            )
+        return _sigmoid(score)
 
     @property
     def model_contribution(self) -> float:
@@ -199,6 +214,13 @@ class PooledFit:
         price already contained everything it knows.
         """
         return self.market_logloss - self.pooled_logloss
+
+    @property
+    def context_contribution(self) -> float | None:
+        """Log loss the context features save on top of market and model."""
+        if self.context_logloss is None:
+            return None
+        return self.pooled_logloss - self.context_logloss
 
     def as_dict(self) -> dict:
         return {
@@ -211,20 +233,54 @@ class PooledFit:
             "model_logloss": self.model_logloss,
             "pooled_logloss": self.pooled_logloss,
             "model_contribution": self.model_contribution,
+            "context_names": list(self.context_names),
+            "context_weights": list(self.context_weights),
+            "context_logloss": self.context_logloss,
+            "context_contribution": self.context_contribution,
         }
 
 
-def fit_pooled(market_name: str, samples: list[tuple[float, float, int]]) -> PooledFit | None:
-    """Fit one market family from ``(market_prob, model_prob, won)`` rows."""
+def fit_pooled(
+    market_name: str,
+    samples: list[tuple],
+    *,
+    context_names: Sequence[str] = (),
+) -> PooledFit | None:
+    """Fit one market family from ``(market_prob, model_prob, context, won)``.
+
+    ``context`` is whatever the match itself told us - the weather at the
+    ground, and anything later collected alongside it. It is fitted as a third
+    opinion so its worth is measured on the same scale as the model's, and it
+    earns weight only if the price did not already contain it.
+    """
     if len(samples) < config.CALIBRATION_MIN_SAMPLES:
         return None
-    labels = [row[2] for row in samples]
+    labels = [row[-1] for row in samples]
     rows = [
-        ([1.0, _logit(market), _logit(model)], won)
-        for market, model, won in samples
+        ([1.0, _logit(row[0]), _logit(row[1])], row[-1]) for row in samples
     ]
     intercept, market_weight, model_weight = _fit_logistic(rows)
     market_only = _fit_logistic([([1.0, f[1]], y) for f, y in rows])
+    pooled_logloss = _logloss(
+        [
+            _sigmoid(intercept + market_weight * f[1] + model_weight * f[2])
+            for f, _ in rows
+        ],
+        labels,
+    )
+    context_weights: tuple[float, ...] = ()
+    context_logloss: float | None = None
+    if context_names and len(samples[0]) == 4:
+        wide = [
+            (features + list(row[2]), label)
+            for (features, label), row in zip(rows, samples)
+        ]
+        beta = _fit_logistic(wide)
+        context_weights = tuple(beta[3:])
+        context_logloss = _logloss(
+            [_sigmoid(sum(b * x for b, x in zip(beta, f))) for f, _ in wide],
+            labels,
+        )
     return PooledFit(
         market=market_name,
         samples=len(samples),
@@ -239,29 +295,63 @@ def fit_pooled(market_name: str, samples: list[tuple[float, float, int]]) -> Poo
             labels,
         ),
         model_logloss=_logloss([row[1] for row in samples], labels),
-        pooled_logloss=_logloss(
-            [
-                _sigmoid(intercept + market_weight * f[1] + model_weight * f[2])
-                for f, _ in rows
-            ],
-            labels,
-        ),
+        pooled_logloss=pooled_logloss,
+        context_names=tuple(context_names),
+        context_weights=context_weights,
+        context_logloss=context_logloss,
     )
 
 
 CALIBRATION_MARKETS = ("1x2", "ou25")
+# What the match itself told us, beyond the two opinions about it. The
+# orientation below says which way each feature pushes a given selection; the
+# fitted weight decides whether it pushes at all.
+CONTEXT_NAMES = ("yagmur", "ruzgar")
+# More rain and more wind push a match one way; a selection that wins when the
+# match goes that way carries +1, its opposite -1, and a selection the feature
+# says nothing about carries 0.
+_CONTEXT_ORIENTATION = {
+    "1x2": {"1": 1.0, "0": 0.0, "2": -1.0},
+    "ou25": {"Alt": -1.0, "Üst": 1.0},
+}
 
 
-def calibration_samples(history: list[dict], model) -> dict[str, list[tuple[float, float, int]]]:
-    """Turn settled matches into ``(market_prob, model_prob, won)`` rows.
+def weather_context(
+    weather: dict[tuple[str, str], tuple[float, float]] | None,
+    team_key: str,
+    match_date: str,
+    orientation: float,
+) -> tuple[float, ...] | None:
+    """Rain and wind at the ground, oriented for one selection."""
+    if not weather:
+        return None
+    observed = weather.get((team_key, match_date))
+    if not observed:
+        return None
+    rain, wind = observed
+    if rain is None or wind is None:
+        return None
+    return (
+        orientation * math.log1p(max(0.0, rain)),
+        orientation * (wind - 20.0) / 15.0,
+    )
+
+
+def calibration_samples(
+    history: list[dict],
+    model,
+    weather: dict[tuple[str, str], tuple[float, float]] | None = None,
+) -> dict[str, list[tuple]]:
+    """Turn settled matches into ``(market_prob, model_prob, context, won)``.
 
     Every selection of a market family becomes its own row, because the layer
     calibrates a probability we might state about a *selection*, not about a
-    match.
+    match. A match with no weather on record is dropped from the fit rather
+    than fed a zero, so an absent observation cannot read as a calm day.
     """
     from .eligibility import is_event_eligible
 
-    samples: dict[str, list[tuple[float, float, int]]] = defaultdict(list)
+    samples: dict[str, list[tuple]] = defaultdict(list)
     for row in history:
         if row.get("ft_home") is None or row.get("ft_away") is None:
             continue
@@ -271,6 +361,15 @@ def calibration_samples(history: list[dict], model) -> dict[str, list[tuple[floa
             continue
         prediction = model.predict(row["home"], row["away"], row.get("competition"))
         total = row["ft_home"] + row["ft_away"]
+
+        def context(family: str, name: str) -> tuple[float, ...] | None:
+            return weather_context(
+                weather,
+                row["home_key"],
+                row["match_date"],
+                _CONTEXT_ORIENTATION[family][name],
+            )
+
         odds_1x2 = [row.get("odds_home"), row.get("odds_draw"), row.get("odds_away")]
         if all(odd and odd > 1.0 for odd in odds_1x2):
             fair = probability.fair_probs(odds_1x2)
@@ -280,22 +379,34 @@ def calibration_samples(history: list[dict], model) -> dict[str, list[tuple[floa
                 row["ft_home"] < row["ft_away"],
             )
             for name, market_prob, won in zip(("1", "0", "2"), fair, outcomes):
+                found = context("1x2", name)
+                if weather is not None and found is None:
+                    continue
                 samples["1x2"].append(
-                    (market_prob, prediction.probs[name], int(won))
+                    (market_prob, prediction.probs[name], found or (), int(won))
                 )
         odds_ou = [row.get("odds_under25"), row.get("odds_over25")]
         if all(odd and odd > 1.0 for odd in odds_ou):
             fair = probability.fair_probs(odds_ou)
             over = prediction.probs["Üst 2.5"]
-            for market_prob, model_prob, won in (
-                (fair[0], 1.0 - over, total < 2.5),
-                (fair[1], over, total > 2.5),
+            for name, market_prob, model_prob, won in (
+                ("Alt", fair[0], 1.0 - over, total < 2.5),
+                ("Üst", fair[1], over, total > 2.5),
             ):
-                samples["ou25"].append((market_prob, model_prob, int(won)))
+                found = context("ou25", name)
+                if weather is not None and found is None:
+                    continue
+                samples["ou25"].append(
+                    (market_prob, model_prob, found or (), int(won))
+                )
     return dict(samples)
 
 
-def fit_calibration(history: list[dict], cutoff_ts: int) -> dict:
+def fit_calibration(
+    history: list[dict],
+    cutoff_ts: int,
+    weather: dict[tuple[str, str], tuple[float, float]] | None = None,
+) -> dict:
     """Fit the layer on history before ``cutoff_ts`` and score it after.
 
     The model used for the fit only ever sees matches before the fit window,
@@ -316,17 +427,20 @@ def fit_calibration(history: list[dict], cutoff_ts: int) -> dict:
     holdout_model = GoalModel(
         [row for row in history if row["start_ts"] < holdout_start], holdout_start
     )
-    fit_samples = calibration_samples(fit_rows, fit_model)
-    holdout_samples = calibration_samples(holdout_rows, holdout_model)
+    fit_samples = calibration_samples(fit_rows, fit_model, weather)
+    holdout_samples = calibration_samples(holdout_rows, holdout_model, weather)
+    context_names = CONTEXT_NAMES if weather else ()
 
     fits: dict[str, dict] = {}
     for market in CALIBRATION_MARKETS:
-        fitted = fit_pooled(market, fit_samples.get(market, []))
+        fitted = fit_pooled(
+            market, fit_samples.get(market, []), context_names=context_names
+        )
         if fitted is None:
             continue
         holdout = holdout_samples.get(market, [])
         if len(holdout) >= config.CALIBRATION_MIN_SAMPLES:
-            labels = [row[2] for row in holdout]
+            labels = [row[-1] for row in holdout]
             market_only = PooledFit(
                 market=market,
                 samples=fitted.samples,
@@ -344,18 +458,31 @@ def fit_calibration(history: list[dict], cutoff_ts: int) -> dict:
                 market_weight=fitted.market_weight,
                 model_weight=fitted.model_weight,
                 market_logloss=_logloss(
-                    [market_only.blend(m, None) for m, _, _ in holdout], labels
+                    [market_only.blend(row[0], None) for row in holdout], labels
                 ),
-                model_logloss=_logloss([mo for _, mo, _ in holdout], labels),
+                model_logloss=_logloss([row[1] for row in holdout], labels),
                 pooled_logloss=_logloss(
-                    [fitted.blend(m, mo) for m, mo, _ in holdout], labels
+                    [fitted.blend(row[0], row[1]) for row in holdout], labels
+                ),
+                context_names=fitted.context_names,
+                context_weights=fitted.context_weights,
+                context_logloss=(
+                    _logloss(
+                        [
+                            fitted.blend(row[0], row[1], row[2])
+                            for row in holdout
+                        ],
+                        labels,
+                    )
+                    if fitted.context_weights
+                    else None
                 ),
             )
             fits[market] = {
                 "fit": fitted.as_dict(),
                 "holdout": scored.as_dict(),
                 "raw_market_logloss": _logloss(
-                    [m for m, _, _ in holdout], labels
+                    [row[0] for row in holdout], labels
                 ),
             }
         else:
@@ -366,6 +493,12 @@ def fit_calibration(history: list[dict], cutoff_ts: int) -> dict:
         for item in fits.values()
         if item.get("holdout")
     ]
+    context_gains = [
+        item["holdout"]["context_contribution"]
+        for item in fits.values()
+        if item.get("holdout")
+        and item["holdout"]["context_contribution"] is not None
+    ]
     return {
         "cutoff_ts": cutoff_ts,
         "fit_matches": len(fit_rows),
@@ -373,6 +506,8 @@ def fit_calibration(history: list[dict], cutoff_ts: int) -> dict:
         "markets": fits,
         "model_earns_weight": bool(gains)
         and min(gains) >= config.CALIBRATION_MIN_MODEL_GAIN,
+        "context_earns_weight": bool(context_gains)
+        and min(context_gains) >= config.CALIBRATION_MIN_MODEL_GAIN,
     }
 
 

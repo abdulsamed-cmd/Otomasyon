@@ -181,16 +181,21 @@ def replay_daily(
     min_expected_value: float | None = None,
     main_min_odds: float | None = None,
     alt_min_odds: float | None = None,
+    probability_provider=None,
 ) -> dict:
-    """Generate and settle main/alternative coupons for every calendar day."""
+    """Generate and settle main/alternative coupons for every calendar day.
+
+    Passing ``probability_provider`` replays the engine under a candidate view
+    of the world, which is how a proposed model is judged against the market
+    before it is allowed anywhere near a live coupon.
+    """
     main_floor = (
         config.DAILY_MAIN_MIN_ODDS if main_min_odds is None else main_min_odds
     )
     alt_floor = config.DAILY_ALT_MIN_ODDS if alt_min_odds is None else alt_min_odds
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
-    probability_provider = None
-    if calibrated:
+    if calibrated and probability_provider is None:
         from .calibration import MarketCalibrator
 
         training = [row for row in history if row["match_date"] < start_date]

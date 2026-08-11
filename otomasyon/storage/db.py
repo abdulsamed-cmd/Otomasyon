@@ -815,6 +815,97 @@ class Database:
         self.conn.commit()
         return len(rows)
 
+    def save_venues(self, venues, *, now: int | None = None) -> int:
+        now = now or int(time.time())
+        rows = [
+            (
+                venue.team_key,
+                venue.stadium,
+                venue.city,
+                venue.country,
+                venue.latitude,
+                venue.longitude,
+                venue.source_match,
+                now,
+            )
+            for venue in venues
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO venues
+                (team_key, stadium, city, country, latitude, longitude,
+                 source_match, updated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(team_key) DO UPDATE SET
+                stadium=excluded.stadium, city=excluded.city,
+                country=excluded.country, latitude=excluded.latitude,
+                longitude=excluded.longitude,
+                source_match=excluded.source_match,
+                updated_ts=excluded.updated_ts
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def load_venues(self) -> dict[str, dict]:
+        return {
+            row["team_key"]: dict(row)
+            for row in self.conn.execute("SELECT * FROM venues").fetchall()
+        }
+
+    def save_venue_weather(self, observations, *, now: int | None = None) -> int:
+        now = now or int(time.time())
+        rows = [
+            (
+                item.team_key,
+                item.weather_date,
+                item.precipitation,
+                item.wind_speed,
+                now,
+            )
+            for item in observations
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO venue_weather
+                (team_key, weather_date, precipitation, wind_speed, fetched_ts)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(team_key, weather_date) DO UPDATE SET
+                precipitation=excluded.precipitation,
+                wind_speed=excluded.wind_speed,
+                fetched_ts=excluded.fetched_ts
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def load_venue_weather(self) -> dict[tuple[str, str], tuple[float, float]]:
+        """``(team_key, date) -> (precipitation, wind)`` for every complete day."""
+        return {
+            (row["team_key"], row["weather_date"]): (
+                row["precipitation"],
+                row["wind_speed"],
+            )
+            for row in self.conn.execute(
+                """
+                SELECT team_key, weather_date, precipitation, wind_speed
+                FROM venue_weather
+                WHERE precipitation IS NOT NULL AND wind_speed IS NOT NULL
+                """
+            ).fetchall()
+        }
+
+    def weather_covered_dates(self, team_key: str) -> set[str]:
+        return {
+            row["weather_date"]
+            for row in self.conn.execute(
+                "SELECT weather_date FROM venue_weather WHERE team_key = ?",
+                (team_key,),
+            ).fetchall()
+        }
+
     def load_clubelo_ratings(self, start_date: str, end_date: str) -> list[dict]:
         rows = self.conn.execute(
             """

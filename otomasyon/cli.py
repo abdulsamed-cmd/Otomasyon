@@ -489,6 +489,22 @@ def cmd_fotmob_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_weather(args: argparse.Namespace) -> int:
+    report = service.collect_weather(
+        args.db, venue_limit=args.venue_limit, horizon_days=args.days
+    )
+    print("=== Maç günü hava verisi (RAPOR MODU) ===")
+    print(
+        f"Sahasında oynayan {report['playing']} takım | "
+        f"bilinen stadyum {report['already_known']}, "
+        f"yeni çözülen {report['resolved']}, yazılan gün {report['days']}"
+    )
+    print("Canlı kupon etkisi: kalibrasyon katmanı karar verir")
+    for error in report["errors"][:10]:
+        print(f"  {error['scope']}: {error['error']}")
+    return 0
+
+
 def cmd_fotmob_lineup_backfill(args: argparse.Namespace) -> int:
     report = service.backfill_prior_lineups(
         args.db, per_team=args.per_team, team_limit=args.team_limit
@@ -789,6 +805,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("under", "over", "home", "draw", "away"),
     )
     p_backtest.set_defaults(func=cmd_backtest)
+
+    p_weather = sub.add_parser(
+        "weather",
+        help="Bugünün takımları için stadyum ve maç günü hava verisi topla",
+    )
+    p_weather.add_argument("--venue-limit", type=int, default=60)
+    p_weather.add_argument("--days", type=int, default=3)
+    p_weather.set_defaults(func=cmd_weather)
 
     p_clubelo = sub.add_parser(
         "clubelo", help="Compare current iddaa 1X2 with independent ClubElo"

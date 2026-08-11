@@ -18,6 +18,12 @@ SPORT_FOOTBALL = 1  # iddaa sport id for football
 HTTP_TIMEOUT = 25  # seconds
 HTTP_RETRIES = 3
 HTTP_BACKOFF = 1.5  # seconds, exponential base
+# Open-Meteo charges by response size and answers 429 when pushed, so a venue
+# is worth waiting for rather than dropping.
+WEATHER_RETRIES = 6
+WEATHER_BACKOFF = 5.0  # seconds, exponential base
+# Politeness gap between venue requests during a backfill.
+WEATHER_REQUEST_GAP = 1.0
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
