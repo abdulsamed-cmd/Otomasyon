@@ -233,6 +233,22 @@ en olası olan hangisi?** Ana kupon en az `1.50`, alternatif en az `2.00`
 biri ayrı ayrı aranıp karşılaştırılıyor — kısa kupon önce denenip orada
 durulmuyor.
 
+Bu aramayı bağlayan tek şey iddaa'nın kendi kuralı. Her pazarın bir **Minimum
+Bahis Sayısı** var ve kupon o sayıdan kısaysa kuponun kendisi reddediliyor:
+"MBS kuralı nedeniyle en az 1 maç daha eklemelisiniz". Bülten bunu maç ve pazar
+seviyesinde `mbc` alanıyla veriyor; iki değer 220 maçlık bir bültende 3 pazarda
+ayrışıyor, o yüzden bağlayıcı olan pazarın kendi değeri. Tipik bir günde
+pazarların ancak dörtte biri tek maçlık kupona giriyor.
+
+Motor artık her bacak sayısını yalnız o sayının kabul ettiği bacaklar üzerinde
+arıyor: `MBS 2` olan bir pazar, ne kadar olası olursa olsun, tek maçlık aramada
+görünmüyor. Kural konmadan önce üretilen `1.50` / `%56,5`'lik kupon kuponhaneye
+girmiyordu; kural sonrası aynı bültenden çıkan kupon `1.53` / `%55,1`. Ölçülen
+bedel 1,4 puan, karşılığında kupon oynanabilir oluyor.
+
+Arşiv bu alanı hiç kaydetmediği için tarihsel replay MBS'i `1` sayıyor ve o gün
+neyin kabul edileceğini söyleyemez; alan artık bültenle birlikte biriktiriliyor.
+
 Pratikte tek bacak çoğu zaman kazanıyor, ama bu bir kural değil ölçüm sonucu:
 her ek bacak kupona bir pazar marjı daha ekler, bu yüzden aynı ödemede uzun
 kupon daha seyrek tutar. Arşivdeki 75 bin maçta `1.85–2.15` fiyatlı tek bir

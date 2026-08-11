@@ -44,13 +44,14 @@ class Database:
         self.conn.commit()
 
     def _migrate_market_mbs(self) -> None:
-        """Add the minimum-bet-count column to markets stored before it."""
-        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(markets)")}
-        if "mbs" not in columns:
-            with self.conn:
-                self.conn.execute(
-                    "ALTER TABLE markets ADD COLUMN mbs INTEGER NOT NULL DEFAULT 1"
-                )
+        """Add the minimum-bet-count column to rows stored before it."""
+        for table in ("markets", "coupon_legs"):
+            columns = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+            if "mbs" not in columns:
+                with self.conn:
+                    self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN mbs INTEGER NOT NULL DEFAULT 1"
+                    )
 
     def _migrate_telegram_bot_runtime(self) -> None:
         """Add poll-health columns to runtime tables created before them."""
@@ -350,13 +351,13 @@ class Database:
                 INSERT INTO coupon_legs
                     (coupon_id, event_id, market_t, market_st, market_sov,
                      market_name, outcome_no, outcome_name, odd_at_creation,
-                     fair_prob)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     fair_prob, mbs)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     coupon_id, leg.event_id, leg.market_code[0], leg.market_code[1],
                     leg.sov, leg.market_name, leg.outcome_no, leg.outcome_name,
-                    leg.odd, leg.fair_prob,
+                    leg.odd, leg.fair_prob, leg.mbs,
                 ),
             )
         self.conn.commit()

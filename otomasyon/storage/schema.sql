@@ -327,6 +327,8 @@ CREATE TABLE IF NOT EXISTS coupon_legs (
     outcome_name      TEXT NOT NULL,
     odd_at_creation   REAL NOT NULL,
     fair_prob         REAL,
+    -- Kept with the coupon so a slip can be shown to have been playable.
+    mbs               INTEGER NOT NULL DEFAULT 1,
     closing_odd       REAL,
     result            TEXT NOT NULL DEFAULT 'pending',  -- pending|win|lose|void
     FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE,
