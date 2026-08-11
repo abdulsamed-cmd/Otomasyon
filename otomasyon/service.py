@@ -45,9 +45,8 @@ def get_live_events(force: bool = False):
     return _cache["events"], _cache["competitions"]
 
 
-def daily_text(
-    db_path: str = config.DB_PATH, *, save: bool = True, rebuild: bool = False
-) -> str:
+def _build_daily(db_path: str):
+    """Build today's coupons without writing anything down."""
     events, competitions = get_live_events()
     now = datetime.now(tz=config.TIMEZONE)
     coupons = engine.build_daily_coupons(
@@ -55,19 +54,52 @@ def daily_text(
         now=now,
         probability_provider=calibrated_probability_provider(db_path),
     )
-    for_date = now.strftime("%Y-%m-%d")
+    return coupons, events, competitions, now, now.strftime("%Y-%m-%d")
 
-    if save:
-        if rebuild:
-            with Database(db_path) as db:
-                db.supersede_daily_coupons(for_date)
+
+def _persist_daily(
+    db_path: str, coupons, events, competitions, now, for_date, *, rebuild: bool
+) -> None:
+    if rebuild:
         with Database(db_path) as db:
-            db.upsert_competitions(competitions)
-            db.save_events(events)
-            for c in (coupons["main"], coupons["alt"]):
-                if c:
-                    db.save_coupon(c, for_date)
-        capture_shadow_predictions(db_path, events=events, now=now)
+            db.supersede_daily_coupons(for_date)
+    with Database(db_path) as db:
+        db.upsert_competitions(competitions)
+        db.save_events(events)
+        for c in (coupons["main"], coupons["alt"]):
+            if c:
+                db.save_coupon(c, for_date)
+    capture_shadow_predictions(db_path, events=events, now=now)
+
+
+def daily_picks(coupons) -> str:
+    """What the reader is being told to play, ignoring how it is priced.
+
+    Odds drift all day without changing the instruction, so only the
+    selections identify a coupon for the purpose of noticing it has changed.
+    """
+    parts = []
+    for kind in ("main", "alt"):
+        coupon = coupons.get(kind)
+        if coupon is None:
+            parts.append(f"{kind}=yok")
+            continue
+        legs = ",".join(
+            f"{leg.event_id}/{leg.market_code[0]}-{leg.market_code[1]}/{leg.outcome_no}"
+            for leg in coupon.legs
+        )
+        parts.append(f"{kind}={legs}")
+    return "|".join(parts)
+
+
+def daily_text(
+    db_path: str = config.DB_PATH, *, save: bool = True, rebuild: bool = False
+) -> str:
+    coupons, events, competitions, now, for_date = _build_daily(db_path)
+    if save:
+        _persist_daily(
+            db_path, coupons, events, competitions, now, for_date, rebuild=rebuild
+        )
     return formatting.format_daily(coupons, for_date)
 
 
@@ -114,8 +146,10 @@ def push_daily(
 ) -> str | None:
     """Proactively send today's daily coupon to the stored chat.
 
-    De-duplicated per day via the ``last_push_date`` setting, so it is safe to
-    call repeatedly. Returns the chat id sent to, or None if skipped.
+    De-duplicated on the selections rather than the day. A coupon that is
+    rebuilt after the morning push replaces the one the reader is holding, and
+    saying nothing would leave them with a slip the system has retired.
+    Returns the chat id sent to, or None if skipped.
     """
     now = now or datetime.now(tz=config.TIMEZONE)
     scheduled = now.replace(
@@ -131,10 +165,31 @@ def push_daily(
         chat_id = db.get_setting("telegram_chat_id")
         if not chat_id:
             return None
-        if not force and db.get_setting("last_push_date") == today:
-            return None
+        pushed_date = db.get_setting("last_push_date")
+        pushed_picks = db.get_setting("last_push_picks")
 
-    text = daily_text(db_path)
+    coupons, events, competitions, built_at, for_date = _build_daily(db_path)
+    picks = daily_picks(coupons)
+    already_pushed_today = pushed_date == today
+    if not force and already_pushed_today and pushed_picks == picks:
+        return None
+
+    _persist_daily(
+        db_path,
+        coupons,
+        events,
+        competitions,
+        built_at,
+        for_date,
+        rebuild=already_pushed_today,
+    )
+    text = formatting.format_daily(coupons, for_date)
+    if already_pushed_today:
+        text = (
+            "KUPON GÜNCELLENDİ — bugün gönderilen kupon geçersiz sayıldı, "
+            "yerine aşağıdaki geçti.\n\n" + text
+        )
+
     response = client.send_message(chat_id, text)
     delivered_chat_id, message_id, telegram_date = _telegram_delivery(
         response, chat_id
@@ -143,11 +198,14 @@ def push_daily(
         db.record_telegram_delivery(
             kind="daily_push",
             notification_dates=[today],
+            # A revision is a second delivery on the same day, so the receipt
+            # is keyed by what was sent as well as when.
+            dedupe_suffix=None if not already_pushed_today else picks,
             chat_id=delivered_chat_id,
             message_id=message_id,
             telegram_date=telegram_date,
             sent_ts=int(now.timestamp()),
-            markers={"last_push_date": today},
+            markers={"last_push_date": today, "last_push_picks": picks},
         )
     return chat_id
 

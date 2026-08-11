@@ -1503,9 +1503,15 @@ class Database:
         telegram_date: int | None,
         sent_ts: int,
         markers: dict[str, str],
+        dedupe_suffix: str | None = None,
     ) -> None:
-        """Atomically persist delivery receipts and their dedupe markers."""
+        """Atomically persist delivery receipts and their dedupe markers.
+
+        ``dedupe_suffix`` distinguishes a second delivery of the same kind on
+        the same date, which is what a corrected coupon is.
+        """
         dates = list(notification_dates)
+        tail = f":{dedupe_suffix}" if dedupe_suffix else ""
         with self.conn:
             self.conn.executemany(
                 """
@@ -1518,7 +1524,7 @@ class Database:
                     (
                         kind,
                         notification_date,
-                        f"{kind}:{notification_date}",
+                        f"{kind}:{notification_date}{tail}",
                         str(chat_id),
                         int(message_id),
                         (

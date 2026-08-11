@@ -28,24 +28,54 @@ def _chat(path):
         db.set_setting("telegram_chat_id", "123")
 
 
+def _coupons(event_id: int = 1):
+    """A real main/alt pair, with the main coupon's match swappable."""
+    from dataclasses import replace
+
+    from .test_engine import NOW, _events
+    from otomasyon import engine
+
+    built = engine.build_daily_coupons(_events(), now=NOW)
+    main = built["main"]
+    built["main"] = replace(
+        main, legs=tuple(replace(leg, event_id=event_id) for leg in main.legs)
+    )
+    return built
+
+
+def _stub_build(monkeypatch, coupons, for_date="2026-08-09"):
+    """Hand push_daily a prepared coupon set and record what it persists."""
+    from .test_engine import NOW, _events
+
+    persisted = []
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda _path: (coupons, _events(), {}, NOW, for_date),
+    )
+    monkeypatch.setattr(
+        service,
+        "_persist_daily",
+        lambda *args, **kwargs: persisted.append(kwargs.get("rebuild")),
+    )
+    return persisted
+
+
 def test_daily_push_has_exact_local_time_gate_and_persists_receipt(
     tmp_path, monkeypatch
 ):
     path = str(tmp_path / "daily.db")
     _chat(path)
-    generated = []
-    monkeypatch.setattr(
-        service, "daily_text", lambda _path: generated.append(_path) or "DAILY"
-    )
+    persisted = _stub_build(monkeypatch, _coupons())
     telegram = Telegram()
 
     before = datetime(2026, 8, 9, 9, 59, 59, tzinfo=config.TIMEZONE)
     assert service.push_daily(path, telegram, now=before) is None
-    assert generated == []
+    assert persisted == []
 
     due = datetime(2026, 8, 9, 10, 0, 0, tzinfo=config.TIMEZONE)
     assert service.push_daily(path, telegram, now=due) == "123"
-    assert generated == [path]
+    assert persisted == [False]
     with Database(path) as db:
         receipt = db.get_telegram_delivery_receipt("daily_push:2026-08-09")
         assert receipt == {
@@ -64,10 +94,73 @@ def test_daily_push_has_exact_local_time_gate_and_persists_receipt(
     assert len(telegram.sent) == 1
 
 
+def test_a_rebuilt_coupon_reaches_the_reader_who_is_holding_the_old_one(
+    tmp_path, monkeypatch
+):
+    # The morning push is not the last word: a coupon rebuilt later in the day
+    # retires the one already sent, and silence would leave it standing.
+    path = str(tmp_path / "revised.db")
+    _chat(path)
+    telegram = Telegram()
+    due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+
+    _stub_build(monkeypatch, _coupons(event_id=1))
+    assert service.push_daily(path, telegram, now=due) == "123"
+
+    later = datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE)
+    persisted = _stub_build(monkeypatch, _coupons(event_id=99))
+    assert service.push_daily(path, telegram, now=later) == "123"
+
+    assert len(telegram.sent) == 2
+    assert "KUPON GÜNCELLENDİ" in telegram.sent[1][1]
+    # The slip it replaces must be retired, not left pending alongside it.
+    assert persisted == [True]
+
+
+def test_an_unchanged_coupon_is_not_sent_twice(tmp_path, monkeypatch):
+    path = str(tmp_path / "same.db")
+    _chat(path)
+    telegram = Telegram()
+    coupons = _coupons()
+    due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+
+    _stub_build(monkeypatch, coupons)
+    assert service.push_daily(path, telegram, now=due) == "123"
+
+    later = datetime(2026, 8, 9, 15, 30, tzinfo=config.TIMEZONE)
+    persisted = _stub_build(monkeypatch, coupons)
+    assert service.push_daily(path, telegram, now=later) is None
+    assert len(telegram.sent) == 1
+    assert persisted == []
+
+
+def test_a_revision_keeps_its_own_receipt_alongside_the_morning_push(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "receipts.db")
+    _chat(path)
+    telegram = Telegram()
+    due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+
+    _stub_build(monkeypatch, _coupons(event_id=1))
+    service.push_daily(path, telegram, now=due)
+    _stub_build(monkeypatch, _coupons(event_id=99))
+    service.push_daily(path, telegram, now=due)
+
+    with Database(path) as db:
+        rows = db.conn.execute(
+            "SELECT dedupe_key FROM telegram_delivery_receipts "
+            "WHERE kind='daily_push' ORDER BY id"
+        ).fetchall()
+    keys = [row["dedupe_key"] for row in rows]
+    assert keys[0] == "daily_push:2026-08-09"
+    assert len(keys) == 2 and keys[1] != keys[0]
+
+
 def test_force_bypasses_daily_time_gate(tmp_path, monkeypatch):
     path = str(tmp_path / "forced.db")
     _chat(path)
-    monkeypatch.setattr(service, "daily_text", lambda _path: "DAILY")
+    _stub_build(monkeypatch, _coupons())
 
     early = datetime(2026, 8, 9, 8, 0, tzinfo=config.TIMEZONE)
     assert service.push_daily(path, Telegram(), force=True, now=early) == "123"
@@ -76,7 +169,7 @@ def test_force_bypasses_daily_time_gate(tmp_path, monkeypatch):
 def test_failed_daily_send_has_no_receipt_or_marker(tmp_path, monkeypatch):
     path = str(tmp_path / "failed.db")
     _chat(path)
-    monkeypatch.setattr(service, "daily_text", lambda _path: "DAILY")
+    _stub_build(monkeypatch, _coupons())
     due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
 
     with pytest.raises(RuntimeError, match="telegram unavailable"):
@@ -92,7 +185,7 @@ def test_missing_send_acknowledgement_has_no_receipt_or_marker(
 ):
     path = str(tmp_path / "missing-ack.db")
     _chat(path)
-    monkeypatch.setattr(service, "daily_text", lambda _path: "DAILY")
+    _stub_build(monkeypatch, _coupons())
 
     class MissingAcknowledgement:
         def send_message(self, chat_id, text):
