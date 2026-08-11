@@ -186,7 +186,9 @@ def test_a_published_coupon_can_be_replaced_only_before_kick_off(tmp_path):
             for row in db.conn.execute("SELECT id, status, notes FROM coupons")
         }
         assert rows[upcoming_id]["notes"] == "superseded"
-        assert rows[upcoming_id]["status"] == "void"
+        # Not "void": voiding is a settlement outcome and would announce a
+        # cancelled result for matches that have not been played.
+        assert rows[upcoming_id]["status"] == "superseded"
         assert rows[running_id]["notes"] is None
         assert rows[running_id]["status"] == "pending"
 
@@ -197,3 +199,26 @@ def test_a_published_coupon_can_be_replaced_only_before_kick_off(tmp_path):
 
     assert service.metrics_by_kind(path)["daily_main"]["coupons"] == 0
     assert service.pending_coupon_summary(path)["coupons"] == 2
+
+
+def test_replacing_a_coupon_does_not_announce_a_cancelled_result(tmp_path):
+    """A replaced coupon has no result to report; only a played one has."""
+    path = str(tmp_path / "no-announce.db")
+    now_ts = int(NOW.timestamp())
+    event = _ou_event(720, 1.95, 1.80)
+    event.start_ts = now_ts + 7200
+    with Database(path) as db:
+        db.upsert_competitions({1: {"name": "Test Lig", "country_code": "TR"}})
+        db.save_events([event], now=now_ts)
+        db.set_setting("telegram_chat_id", "1")
+        db.save_coupon(
+            engine.build_daily_coupons([event], now=NOW)["main"],
+            "2026-08-08",
+            now=now_ts,
+        )
+        db.supersede_daily_coupons("2026-08-08", now=now_ts)
+        db.conn.commit()
+
+    service.queue_missing_settlement_notifications(path, for_dates=["2026-08-08"])
+    with Database(path) as db:
+        assert db.count("telegram_notification_outbox") == 0

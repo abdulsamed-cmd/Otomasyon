@@ -357,6 +357,10 @@ class Database:
         Only coupons whose matches have all yet to start may be retired: once
         a leg has kicked off, the coupon has been played and rewriting it
         would be rewriting history.
+
+        A retired coupon gets its own status rather than being voided. Voiding
+        is a settlement outcome, so it would announce a cancelled *result* for
+        matches that are still going to be played.
         """
         rows = self.conn.execute(
             """
@@ -379,7 +383,7 @@ class Database:
         ]
         for coupon_id in retired:
             self.conn.execute(
-                "UPDATE coupons SET status='void', notes='superseded' WHERE id=?",
+                "UPDATE coupons SET status='superseded', notes='superseded' WHERE id=?",
                 (coupon_id,),
             )
         self.conn.commit()

@@ -20,8 +20,9 @@ def format_coupon(title: str, coupon) -> str:
         return f"{title}: uygun kupon bulunamadı."
     lines = [
         f"{title}  |  Toplam oran: {coupon.total_odds:.2f}  |  "
-        f"Birleşik olasılık: %{coupon.combined_prob * 100:.1f}  |  "
-        f"{len(coupon.legs)} maç"
+        f"Tutma olasılığı: %{coupon.combined_prob * 100:.1f}  |  "
+        f"{len(coupon.legs)} maç  |  "
+        f"kupon marjı %{coupon.cumulative_margin * 100:.1f}"
     ]
     for leg in coupon.legs:
         lines.append(
@@ -36,7 +37,8 @@ def format_daily(coupons: dict, for_date: str) -> str:
     if not coupons.get("main") and not coupons.get("alt"):
         return (
             f"Günün kuponu ({for_date}) henüz hazır değil.\n"
-            "Uygun (2.00–3.00) düşük riskli kombinasyon bulunamadı."
+            f"{config.DAILY_MIN_TOTAL_ODDS:.2f}–{config.DAILY_MAX_TOTAL_ODDS:.2f} "
+            "bandında uygun kurgu bulunamadı."
         )
     parts = [f"GÜNÜN DÜŞÜK RİSKLİ KUPONLARI ({for_date})", ""]
     parts.append(format_coupon("ANA KUPON", coupons.get("main")))
