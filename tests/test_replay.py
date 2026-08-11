@@ -1,10 +1,14 @@
 from datetime import datetime
 
+import pytest
+
 from otomasyon import config
 from otomasyon.replay import replay_daily
 
 
-def _row(index: int, total_goals: int) -> dict:
+def _row(
+    index: int, total_goals: int, under: float = 1.50, over: float = 2.60
+) -> dict:
     start = datetime(2026, 3, 10, 13 + index, tzinfo=config.TIMEZONE)
     suffix = ("Alpha", "Bravo", "Charlie", "Delta")[index]
     return {
@@ -21,15 +25,17 @@ def _row(index: int, total_goals: int) -> dict:
         "odds_home": None,
         "odds_draw": None,
         "odds_away": None,
-        "odds_under25": 1.50,
-        "odds_over25": 2.60,
+        "odds_under25": under,
+        "odds_over25": over,
     }
 
 
 def test_replay_uses_production_engine_and_settles_main_and_alternative():
     history = [
-        _row(0, 1),
-        _row(1, 2),
+        # Only these two matches offer a selection priced inside the band, so
+        # they become the main and the alternative coupon respectively.
+        _row(0, 1, under=1.95, over=1.80),
+        _row(1, 3, under=2.05, over=1.72),
         _row(2, 3),
         _row(3, 1),
     ]
@@ -39,9 +45,10 @@ def test_replay_uses_production_engine_and_settles_main_and_alternative():
     assert report["method"] == "closing_odds_partial"
     assert report["main"]["coupons"] == 1
     assert report["main"]["won"] == 1
+    assert report["main"]["average_legs"] == 1
     assert report["alternative"]["coupons"] == 1
     assert report["alternative"]["lost"] == 1
-    assert report["combined"]["roi"] == 0.125  # (2.25-1 - 1) / 2
+    assert report["combined"]["roi"] == pytest.approx((0.95 - 1.0) / 2)
 
 
 def test_replay_excludes_matches_started_before_daily_generation():

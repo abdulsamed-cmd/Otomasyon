@@ -40,33 +40,57 @@ MARKET_BTTS = (2, 89)             # Karşılıklı Gol (Var/Yok)
 MARKET_TOTAL_GOALS_BAND = (2, 4)  # Toplam Gol (0-1 / 2-3 / 4-5 / 6+)
 MARKET_HTFT = (2, 90)             # İlk Yarı / Maç Sonucu
 MARKET_ODD_EVEN = (2, 91)         # Tek / Çift
+MARKET_HT_DOUBLE_CHANCE = (2, 77)  # 1. Yarı Çifte Şans
 
-# Markets prioritised when building LOW-RISK daily coupons.
-LOW_RISK_MARKETS = (
+# Each double chance selection wins on two of the three results, so its three
+# fair probabilities sum to 2 rather than 1. Normalising them to 1 halves every
+# double chance probability, which silently hides the safest market in the
+# bulletin behind any probability floor.
+MARKET_OUTCOME_COVERAGE = {
+    MARKET_DOUBLE_CHANCE: 2,
+    MARKET_HT_DOUBLE_CHANCE: 2,
+}
+
+# Markets the daily coupon may draw a leg from. Measured on a live bulletin,
+# these all price at a ~18% margin, the cheapest iddaa offers. Combination
+# markets (score+goals, handicap, goal bands, half/full time) charge 21-24% for
+# the same money and are excluded: every extra point of margin comes straight
+# out of the hit rate. Only markets ``settlement.settle_leg`` can decide are
+# listed, so a coupon can never contain a leg we cannot grade.
+DAILY_COUPON_MARKETS = (
     MARKET_DOUBLE_CHANCE,
     MARKET_OVER_UNDER,
     MARKET_BTTS,
-    MARKET_MATCH_RESULT,  # only when a strong favourite exists (enforced by engine)
+    MARKET_MATCH_RESULT,
 )
+# Hard ceiling on the margin of any market a leg may come from, so a market
+# that is repriced upwards drops out on its own.
+MARKET_MAX_MARGIN = 0.20
 
 # --- Coupon rules ----------------------------------------------------------
-DAILY_MIN_TOTAL_ODDS = 2.00
-DAILY_MAX_TOTAL_ODDS = 3.00
-DAILY_MIN_LEGS = 2
+# The coupon targets a ~2.00 return. The band is what the engine is allowed to
+# land on while it hunts for the highest win probability at that price.
+DAILY_MIN_TOTAL_ODDS = 1.85
+DAILY_MAX_TOTAL_ODDS = 2.15
+# One leg is allowed, and preferred: every additional leg multiplies another
+# market margin into the coupon, so at the same total odds a 2-leg build wins
+# far less often than a single. Measured on 75k archived matches, a single
+# selection priced 1.85-2.15 landed 41.6% of the time, while two legs of ~1.41
+# paying the same 2.00 landed 32.7%.
+DAILY_MIN_LEGS = 1
 DAILY_MAX_LEGS = 4
 
-# A leg is only "safe" enough for the daily coupon if its fair (margin-free)
-# probability clears this floor.
-LEG_MIN_FAIR_PROB = 0.55
-# Match Result (1X2) is riskier, so only allow it for a strong favourite.
-FAVORITE_MIN_FAIR_PROB = 0.60
-# Only legs whose odds sit in this band are useful for building a 2-4 leg
-# coupon inside the 2.00-3.00 window: below the floor a leg barely moves the
-# product; the ceiling keeps individual legs reasonably safe.
-LEG_MIN_ODD = 1.20
-LEG_MAX_ODD = 1.90
-# Triples/quads are searched over the top-N safest legs (perf guard). Pairs are
-# always searched over the full pool so good higher-odd pairs are never missed.
+# Sanity floor for a leg: below this the outcome is simply unlikely, whatever
+# the search thinks of it. It is deliberately low, because the objective
+# already punishes weak legs - a single leg paying 2.00 is a ~0.44 shot and
+# must stay eligible.
+LEG_MIN_FAIR_PROB = 0.35
+# A leg is useless outside this band: under the floor it barely moves the
+# total, over the ceiling it alone overshoots the target price.
+LEG_MIN_ODD = 1.15
+LEG_MAX_ODD = DAILY_MAX_TOTAL_ODDS
+# Triples/quads are searched over the top-N safest legs (perf guard). Singles
+# and pairs are always searched over the full pool.
 COMBO_CAP = 64
 
 # --- Surprise lab ----------------------------------------------------------

@@ -25,27 +25,42 @@ def implied_prob(odd: float) -> float:
     return 1.0 / odd
 
 
-def market_overround(odds: Sequence[float]) -> float:
-    """Sum of implied probabilities across a market's outcomes (>= 1.0)."""
-    return sum(implied_prob(o) for o in odds)
+def market_overround(odds: Sequence[float], outcome_coverage: int = 1) -> float:
+    """Margin factor of a market: implied probabilities over their true sum.
+
+    A selection usually wins on exactly one of the underlying results, so the
+    true probabilities sum to 1. Double chance is the exception: each of its
+    three selections wins on two of the three results, so they sum to 2.
+    ``outcome_coverage`` states that sum, which keeps the returned factor
+    comparable across every market.
+    """
+    return sum(implied_prob(o) for o in odds) / outcome_coverage
 
 
-def fair_probs(odds: Sequence[float]) -> list[float]:
+def market_margin(odds: Sequence[float], outcome_coverage: int = 1) -> float:
+    """Bookmaker margin of a market as a fraction (0.18 == 18%)."""
+    return market_overround(odds, outcome_coverage) - 1.0
+
+
+def fair_probs(odds: Sequence[float], outcome_coverage: int = 1) -> list[float]:
     """Margin-free fair probabilities for all outcomes of one market.
 
-    Normalises ``1/odd`` by the market overround so the result sums to 1.0.
+    Divides ``1/odd`` by the market's margin factor, so the result sums to
+    ``outcome_coverage``.
     """
     if not odds:
         return []
-    overround = market_overround(odds)
+    overround = market_overround(odds, outcome_coverage)
     if overround <= 0:
         raise ValueError("overround must be positive")
     return [implied_prob(o) / overround for o in odds]
 
 
-def fair_prob_for(odds: Sequence[float], index: int) -> float:
+def fair_prob_for(
+    odds: Sequence[float], index: int, outcome_coverage: int = 1
+) -> float:
     """Fair probability of a single outcome given its market's full odds."""
-    return fair_probs(odds)[index]
+    return fair_probs(odds, outcome_coverage)[index]
 
 
 def combined_probability(probs: Iterable[float]) -> float:

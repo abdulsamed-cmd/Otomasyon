@@ -1,13 +1,19 @@
-"""Low-risk daily coupon engine.
+"""Daily coupon engine.
 
-Given a bulletin of normalized events, build a **main** and an **alternative**
-coupon that each:
+The engine builds a **main** and an **alternative** coupon that each:
 
-- use 2-4 legs, one selection per match (no in-match correlation);
-- have combined decimal odds within [2.00, 3.00];
-- prefer low-risk markets (double chance, over/under, both-teams-to-score, and
-  match result only for a strong favourite);
-- maximise the combined *fair* (margin-free) win probability.
+- land inside the target odds band (``DAILY_MIN_TOTAL_ODDS`` ..
+  ``DAILY_MAX_TOTAL_ODDS``, a ~2.00 return);
+- use as few legs as can reach that band, from 1 to ``DAILY_MAX_LEGS``;
+- take at most one selection per match, so no two legs move together;
+- draw only from markets we can grade and that price at a low margin;
+- maximise the joint *fair* (margin-free) win probability, i.e. the chance the
+  coupon actually lands.
+
+Leg count is an outcome of that objective rather than a setting. Every extra
+leg multiplies another market margin into the coupon, so at a fixed payout a
+shorter coupon wins strictly more often; the search therefore stops at the
+smallest leg count that can reach the band.
 
 The alternative coupon reuses no match from the main coupon.
 
@@ -16,6 +22,7 @@ Nothing here places bets - coupons are informational only.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import combinations
@@ -23,14 +30,6 @@ from itertools import combinations
 from . import config, probability
 from .eligibility import is_event_eligible
 from .iddaa.normalize import NormalizedEvent, NormalizedMarket
-
-# Markets eligible for the daily low-risk coupon.
-_PRIORITY_MARKETS = (
-    config.MARKET_DOUBLE_CHANCE,
-    config.MARKET_OVER_UNDER,
-    config.MARKET_BTTS,
-    config.MARKET_MATCH_RESULT,  # favourite-only, enforced below
-)
 
 
 @dataclass
@@ -67,61 +66,73 @@ class Coupon:
         return probability.combined_probability(leg.fair_prob for leg in self.legs)
 
     @property
+    def cumulative_margin(self) -> float:
+        """Margin the whole coupon carries, compounded over its legs.
+
+        This is the gap between what the coupon pays and what a fair price
+        would pay, and it is the single number the leg count moves.
+        """
+        priced = self.combined_prob * self.total_odds
+        if priced <= 0:
+            return 0.0
+        return 1.0 / priced - 1.0
+
+    @property
     def event_ids(self) -> set[int]:
         return {leg.event_id for leg in self.legs}
 
 
-def _best_selection(
-    market: NormalizedMarket, estimated_probs: list[float] | None = None
-) -> tuple[int, float] | None:
-    """Index and probability of the most likely outcome of a market."""
-    odds = [o for o in market.odds if o and o > 1.0]
-    if len(odds) != len(market.selections) or not odds:
-        return None
-    probs = estimated_probs or probability.fair_probs(odds)
-    if len(probs) != len(market.selections):
-        return None
-    best_idx = max(range(len(probs)), key=lambda i: probs[i])
-    return best_idx, probs[best_idx]
+def _market_coverage(market: NormalizedMarket) -> int:
+    return config.MARKET_OUTCOME_COVERAGE.get(market.code, 1)
 
 
 def candidate_legs_for_event(event: NormalizedEvent, probability_provider=None) -> list[Leg]:
-    """All qualifying low-risk legs an event offers (may be several)."""
+    """Every leg an event offers that the coupon is allowed to use.
+
+    All selections of an allowed market are returned, not just its favourite:
+    the search needs the selection that lands on the target price, which is
+    often not the most likely one.
+    """
     legs: list[Leg] = []
     for market in event.markets:
         if market.status != 1:
             continue
-        if market.code not in _PRIORITY_MARKETS:
+        if market.code not in config.DAILY_COUPON_MARKETS:
             continue
-        estimated = probability_provider(event, market) if probability_provider else None
-        best = _best_selection(market, estimated)
-        if best is None:
+        odds = [o for o in market.odds if o and o > 1.0]
+        if len(odds) != len(market.selections) or len(odds) < 2:
             continue
-        idx, fair = best
-
-        threshold = config.LEG_MIN_FAIR_PROB
-        if market.code == config.MARKET_MATCH_RESULT:
-            threshold = config.FAVORITE_MIN_FAIR_PROB
-        if fair < threshold:
+        coverage = _market_coverage(market)
+        if probability.market_margin(odds, coverage) > config.MARKET_MAX_MARGIN:
             continue
-
-        sel = market.selections[idx]
-        legs.append(
-            Leg(
-                event_id=event.event_id,
-                home=event.home,
-                away=event.away,
-                competition=event.competition_name,
-                start_ts=event.start_ts,
-                market_code=market.code,
-                market_name=market.name,
-                sov=market.sov,
-                outcome_no=sel.outcome_no,
-                outcome_name=sel.name,
-                odd=sel.odd,
-                fair_prob=fair,
+        probs = (
+            probability_provider(event, market)
+            if probability_provider
+            else None
+        ) or probability.fair_probs(odds, coverage)
+        if len(probs) != len(market.selections):
+            continue
+        for selection, odd, fair in zip(market.selections, odds, probs):
+            if not (config.LEG_MIN_ODD <= odd <= config.LEG_MAX_ODD):
+                continue
+            if fair < config.LEG_MIN_FAIR_PROB:
+                continue
+            legs.append(
+                Leg(
+                    event_id=event.event_id,
+                    home=event.home,
+                    away=event.away,
+                    competition=event.competition_name,
+                    start_ts=event.start_ts,
+                    market_code=market.code,
+                    market_name=market.name,
+                    sov=market.sov,
+                    outcome_no=selection.outcome_no,
+                    outcome_name=selection.name,
+                    odd=odd,
+                    fair_prob=fair,
+                )
             )
-        )
     return legs
 
 
@@ -131,20 +142,14 @@ def _select_pool(
     until_ts: int,
     probability_provider=None,
 ) -> list[Leg]:
-    """All qualifying legs (odds within the useful band) for in-window events.
-
-    Keeps every band leg (there may be several per event); the search enforces
-    the one-selection-per-match rule via distinct event ids.
-    """
+    """All usable legs for events kicking off inside the window."""
     pool: list[Leg] = []
     for ev in events:
         if not (now_ts < ev.start_ts <= until_ts):
             continue
         if not is_event_eligible(ev.competition_name, ev.home, ev.away):
             continue
-        for leg in candidate_legs_for_event(ev, probability_provider):
-            if config.LEG_MIN_ODD <= leg.odd <= config.LEG_MAX_ODD:
-                pool.append(leg)
+        pool.extend(candidate_legs_for_event(ev, probability_provider))
     return pool
 
 
@@ -152,67 +157,94 @@ def _in_window(total: float) -> bool:
     return config.DAILY_MIN_TOTAL_ODDS <= total <= config.DAILY_MAX_TOTAL_ODDS
 
 
+def _acceptable(prob: float, total: float, min_expected_value: float | None) -> bool:
+    return (
+        min_expected_value is None
+        or prob * total - 1.0 >= min_expected_value
+    )
+
+
+def _best_single(legs, min_expected_value):
+    best = None
+    for leg in legs:
+        if not _in_window(leg.odd):
+            continue
+        if not _acceptable(leg.fair_prob, leg.odd, min_expected_value):
+            continue
+        if best is None or leg.fair_prob > best[0]:
+            best = (leg.fair_prob, [leg])
+    return best
+
+
+def _best_pair(legs, min_expected_value):
+    """Best two-leg build, over the full pool.
+
+    The partners of a leg form a contiguous slice once the pool is sorted by
+    odd, so each leg only looks at the legs that can actually complete it.
+    """
+    ordered = sorted(legs, key=lambda leg: leg.odd)
+    odds = [leg.odd for leg in ordered]
+    best = None
+    for index, first in enumerate(ordered):
+        low = config.DAILY_MIN_TOTAL_ODDS / first.odd
+        high = config.DAILY_MAX_TOTAL_ODDS / first.odd
+        start = max(index + 1, bisect_left(odds, low))
+        for second in ordered[start : bisect_right(odds, high)]:
+            if second.event_id == first.event_id:
+                continue
+            total = first.odd * second.odd
+            prob = first.fair_prob * second.fair_prob
+            if not _acceptable(prob, total, min_expected_value):
+                continue
+            if best is None or prob > best[0]:
+                best = (prob, [first, second])
+    return best
+
+
+def _best_combo(legs, size, min_expected_value):
+    """Best build of ``size`` legs, over the safest ``COMBO_CAP`` legs."""
+    top = sorted(legs, key=lambda leg: leg.fair_prob, reverse=True)[: config.COMBO_CAP]
+    best = None
+    for combo in combinations(top, size):
+        if len({leg.event_id for leg in combo}) != size:
+            continue
+        total = probability.total_odds(leg.odd for leg in combo)
+        if not _in_window(total):
+            continue
+        prob = probability.combined_probability(leg.fair_prob for leg in combo)
+        if not _acceptable(prob, total, min_expected_value):
+            continue
+        if best is None or prob > best[0]:
+            best = (prob, list(combo))
+    return best
+
+
 def _best_coupon(
     pool: list[Leg],
     exclude_events: set[int],
     min_expected_value: float | None = None,
 ) -> Coupon | None:
-    """Max combined-probability coupon (2-4 legs, distinct matches, odds in range).
+    """Highest joint fair probability that lands inside the odds band.
 
-    Pairs are searched exhaustively over the full pool (cheap, and guarantees we
-    never miss a strong higher-odd pair). Triples and quads are searched over the
-    top ``COMBO_CAP`` safest legs to bound the combinatorics.
+    Leg counts are tried shortest first and the search stops at the first count
+    that can reach the band, because a longer coupon at the same price carries
+    another market margin and therefore always wins less often.
     """
     legs = [leg for leg in pool if leg.event_id not in exclude_events]
-    best_prob = -1.0
-    best_legs: list[Leg] | None = None
-
-    # -- pairs: full O(n^2) scan --
-    n = len(legs)
-    for i in range(n):
-        a = legs[i]
-        for j in range(i + 1, n):
-            b = legs[j]
-            if a.event_id == b.event_id:
-                continue
-            total = a.odd * b.odd
-            if _in_window(total):
-                prob = a.fair_prob * b.fair_prob
-                if (
-                    min_expected_value is not None
-                    and prob * total - 1.0 < min_expected_value
-                ):
-                    continue
-                if prob > best_prob:
-                    best_prob = prob
-                    best_legs = [a, b]
-
-    # -- triples & quads: over the safest COMBO_CAP legs --
-    top = sorted(legs, key=lambda leg: leg.fair_prob, reverse=True)[: config.COMBO_CAP]
-    for size in (3, config.DAILY_MAX_LEGS):
-        if size < 3:
+    for size in range(config.DAILY_MIN_LEGS, config.DAILY_MAX_LEGS + 1):
+        if size == 1:
+            best = _best_single(legs, min_expected_value)
+        elif size == 2:
+            best = _best_pair(legs, min_expected_value)
+        else:
+            best = _best_combo(legs, size, min_expected_value)
+        if best is None:
             continue
-        for combo in combinations(top, size):
-            if len({leg.event_id for leg in combo}) != size:
-                continue
-            total = probability.total_odds(leg.odd for leg in combo)
-            if not _in_window(total):
-                continue
-            prob = probability.combined_probability(leg.fair_prob for leg in combo)
-            if (
-                min_expected_value is not None
-                and prob * total - 1.0 < min_expected_value
-            ):
-                continue
-            if prob > best_prob:
-                best_prob = prob
-                best_legs = list(combo)
-
-    if best_legs is None:
-        return None
-    # Present legs in kick-off order.
-    best_legs.sort(key=lambda leg: leg.start_ts)
-    return Coupon(kind="daily", legs=best_legs)
+        chosen = best[1]
+        # Present legs in kick-off order.
+        chosen.sort(key=lambda leg: leg.start_ts)
+        return Coupon(kind="daily", legs=chosen)
+    return None
 
 
 def build_daily_coupons(

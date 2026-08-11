@@ -11,7 +11,8 @@ from otomasyon import surprise
 
 def _seed(path):
     events = _events()
-    events[0].home = "PRIVATE HOME TEAM"
+    for event in events:
+        event.home = "PRIVATE HOME TEAM"
     coupons = engine.build_daily_coupons(events, now=NOW)
     with Database(path) as db:
         db.upsert_competitions(
