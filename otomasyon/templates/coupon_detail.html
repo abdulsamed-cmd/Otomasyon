@@ -10,6 +10,17 @@
     </div>
     <div class="total-odd"><span>Toplam oran</span><strong>{{ "%.2f"|format(coupon.total_odds) }}</strong></div>
   </div>
+  {% set known = coupon.legs | rejectattr('mbs', 'none') | map(attribute='mbs') | list %}
+  <p class="mbs-note">
+    {{ coupon.legs | length }} maç ·
+    {% if known | length < coupon.legs | length %}
+      MBS kuralı konmadan önce kurulmuş: oynanabilir miydi, kayıtta yok.
+    {% else %}
+      {% set required = known | max %}
+      MBS kuralının istediği en az maç: {{ required }} —
+      {% if coupon.legs | length >= required %}kuponhanede oynanabilir{% else %}kuponhane reddeder{% endif %}
+    {% endif %}
+  </p>
 </section>
 <div class="legs">
 {% for leg in coupon.legs %}
@@ -21,6 +32,7 @@
     </div>
     <div class="pick"><span>Seçim</span><b>{{ leg.outcome_name }}</b></div>
     <div class="pick"><span>Oran</span><b>{{ "%.2f"|format(leg.odd_at_creation) }}</b></div>
+    <div class="pick"><span>MBS</span><b>{{ leg.mbs if leg.mbs is not none else "—" }}</b></div>
     <span class="status {{ leg.result }}">{{ {'win':'Tuttu','lose':'Yattı','void':'İade','pending':'Bekliyor'}.get(leg.result, leg.result) }}</span>
   </article>
 {% endfor %}

@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS markets (
     name        TEXT NOT NULL,
     status      INTEGER NOT NULL,
     -- Minimum Bahis Sayısı: shortest coupon iddaa will accept this market in.
-    mbs         INTEGER NOT NULL DEFAULT 1,
+    -- NULL where the row was stored before the bulletin was read for it.
+    mbs         INTEGER,
     UNIQUE (event_id, t, st, sov),
     FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 );
@@ -328,7 +329,8 @@ CREATE TABLE IF NOT EXISTS coupon_legs (
     odd_at_creation   REAL NOT NULL,
     fair_prob         REAL,
     -- Kept with the coupon so a slip can be shown to have been playable.
-    mbs               INTEGER NOT NULL DEFAULT 1,
+    -- NULL means the coupon predates the rule and nothing is known about it.
+    mbs               INTEGER,
     closing_odd       REAL,
     result            TEXT NOT NULL DEFAULT 'pending',  -- pending|win|lose|void
     FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE,

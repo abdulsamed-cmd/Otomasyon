@@ -44,14 +44,17 @@ class Database:
         self.conn.commit()
 
     def _migrate_market_mbs(self) -> None:
-        """Add the minimum-bet-count column to rows stored before it."""
+        """Add the minimum-bet-count column to rows stored before it.
+
+        Deliberately nullable: rows written before the bulletin was read for
+        this field have no limit on record, and defaulting them to 1 would
+        state that they were playable when nobody ever checked.
+        """
         for table in ("markets", "coupon_legs"):
             columns = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
             if "mbs" not in columns:
                 with self.conn:
-                    self.conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN mbs INTEGER NOT NULL DEFAULT 1"
-                    )
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN mbs INTEGER")
 
     def _migrate_telegram_bot_runtime(self) -> None:
         """Add poll-health columns to runtime tables created before them."""

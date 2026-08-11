@@ -93,6 +93,46 @@ def test_private_coupon_details_require_password_and_csrf(tmp_path):
     assert b"PRIVATE HOME TEAM" in detail.data
 
 
+def _logged_in(db_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DB_PATH": db_path,
+            "SECRET_KEY": "test-secret",
+            "DASHBOARD_PASSWORD": "correct-password",
+        }
+    )
+    client = app.test_client()
+    login = client.get("/login")
+    client.post(
+        "/login",
+        data={"csrf_token": _csrf(login.data), "password": "correct-password"},
+        follow_redirects=True,
+    )
+    return client
+
+
+def test_a_coupon_detail_states_the_minimum_bet_count_it_satisfies(tmp_path):
+    db_path = str(tmp_path / "web.db")
+    coupon_id = _seed(db_path)
+    detail = _logged_in(db_path).get(f"/coupons/{coupon_id}").data.decode()
+    assert "MBS" in detail
+    assert "kuponhanede oynanabilir" in detail
+
+
+def test_a_coupon_from_before_the_rule_does_not_claim_it_was_playable(tmp_path):
+    # Legs stored before the limit was read carry no limit, and a page that
+    # filled the blank with 1 would vouch for a coupon nobody ever checked.
+    db_path = str(tmp_path / "web.db")
+    coupon_id = _seed(db_path)
+    with Database(db_path) as db:
+        db.conn.execute("UPDATE coupon_legs SET mbs=NULL WHERE coupon_id=?", (coupon_id,))
+        db.conn.commit()
+    detail = _logged_in(db_path).get(f"/coupons/{coupon_id}").data.decode()
+    assert "kayıtta yok" in detail
+    assert "kuponhanede oynanabilir" not in detail
+
+
 def test_surprise_details_are_also_private(tmp_path):
     db_path = str(tmp_path / "web.db")
     report_id = _seed_surprise(db_path)
