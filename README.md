@@ -237,8 +237,9 @@ Bu aramayı bağlayan tek şey iddaa'nın kendi kuralı. Her pazarın bir **Mini
 Bahis Sayısı** var ve kupon o sayıdan kısaysa kuponun kendisi reddediliyor:
 "MBS kuralı nedeniyle en az 1 maç daha eklemelisiniz". Bülten bunu maç ve pazar
 seviyesinde `mbc` alanıyla veriyor; iki değer 220 maçlık bir bültende 3 pazarda
-ayrışıyor, o yüzden bağlayıcı olan pazarın kendi değeri. Tipik bir günde
-pazarların ancak dörtte biri tek maçlık kupona giriyor.
+ayrışıyor, o yüzden bağlayıcı olan pazarın kendi değeri. 11 Ağustos bülteninde
+motorun kullandığı 1.008 pazarın yalnız `%19,6`'sı tek maçlık kupona giriyordu:
+`219` maçın `46`'sı tek başına oynanabiliyor, `133`'ü üç maç istiyor.
 
 Motor artık her bacak sayısını yalnız o sayının kabul ettiği bacaklar üzerinde
 arıyor: `MBS 2` olan bir pazar, ne kadar olası olursa olsun, tek maçlık aramada
