@@ -28,7 +28,7 @@ def format_coupon(title: str, coupon) -> str:
         lines.append(
             f"  • [{_hm(leg.start_ts)}] {leg.home} - {leg.away}\n"
             f"      {leg.market_name}: {leg.outcome_name} @ {leg.odd}  "
-            f"(adil %{leg.fair_prob * 100:.0f})"
+            f"(piyasa %{leg.fair_prob * 100:.0f} veriyor)"
         )
     return "\n".join(lines)
 
@@ -45,6 +45,21 @@ def format_daily(coupons: dict, for_date: str) -> str:
     parts.append("")
     parts.append(format_coupon("ALTERNATİF", coupons.get("alt")))
     parts.append("")
+    if any(
+        coupon.combined_prob < 0.5
+        for coupon in (coupons.get("main"), coupons.get("alt"))
+        if coupon
+    ):
+        # Read off the coupon rather than asserted: at a payout this high the
+        # market margin leaves no selection above 50%, so the pick is the less
+        # likely side by arithmetic, not by disagreeing with the market.
+        parts.append(
+            "Not: Kupon piyasayı yenme iddiası taşımaz; seçimler piyasanın "
+            "kendi olasılıklarına göre sıralanır. Hedeflenen ödeme bu "
+            "seviyedeyken marj nedeniyle %50 üstü seçim kalmaz, bu yüzden "
+            "kupon piyasanın daha az ihtimal verdiği taraftadır. Daha sık "
+            "tutan kupon isteniyorsa daha düşük ödeme gerekir."
+        )
     parts.append(
         "Not: Piyasa tabanlı deneme kuponudur; bağlamsal ROI modeli henüz "
         "kabul testini geçmemiştir. Bilgilendirme amaçlıdır, otomatik oynama "

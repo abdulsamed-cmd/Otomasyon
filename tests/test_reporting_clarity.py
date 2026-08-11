@@ -8,7 +8,9 @@ which claims a precision the data cannot support.
 
 import json
 
-from otomasyon import config, probability, service
+from datetime import datetime
+
+from otomasyon import config, engine, formatting, probability, service
 from otomasyon.engine import Coupon, Leg
 from otomasyon.iddaa.normalize import NormalizedEvent
 from otomasyon.settlement import MatchResult
@@ -267,3 +269,42 @@ def test_report_says_the_model_is_in_use_once_it_earns_weight(tmp_path):
 
     assert "ağırlığı kazandı" in service.calibration_text(path)
     assert service.model_influence_text(path) == "Kupon seçimi: MODEL kullanılıyor"
+
+
+def _coupon_at(prob: float, odd: float):
+    leg = engine.Leg(
+        event_id=1,
+        home="Ev",
+        away="Deplasman",
+        competition="Test Lig",
+        start_ts=int(datetime(2026, 8, 11, 21, tzinfo=config.TIMEZONE).timestamp()),
+        market_code=config.MARKET_BTTS,
+        market_name="Karşılıklı Gol",
+        sov=None,
+        outcome_no=2,
+        outcome_name="Yok",
+        odd=odd,
+        fair_prob=prob,
+    )
+    return engine.Coupon(kind="daily_main", legs=[leg])
+
+
+def test_a_leg_is_labelled_as_the_markets_own_view_not_our_forecast():
+    text = formatting.format_coupon("ANA KUPON", _coupon_at(0.457, 1.85))
+    assert "piyasa %46 veriyor" in text
+    assert "adil" not in text
+
+
+def test_an_underdog_coupon_says_it_is_not_beating_the_market():
+    text = formatting.format_daily(
+        {"main": _coupon_at(0.457, 1.85), "alt": None}, "2026-08-11"
+    )
+    assert "piyasayı yenme iddiası taşımaz" in text
+    assert "daha az ihtimal verdiği taraftadır" in text
+
+
+def test_a_favourite_coupon_drops_the_underdog_warning():
+    text = formatting.format_daily(
+        {"main": _coupon_at(0.606, 1.40), "alt": None}, "2026-08-11"
+    )
+    assert "daha az ihtimal verdiği taraftadır" not in text
