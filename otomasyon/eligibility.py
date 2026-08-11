@@ -1,8 +1,10 @@
 """Competition-quality filters for the low-risk daily process.
 
 Friendly and development/reserve competitions have unstable motivation,
-lineups and substitution patterns. They are excluded from the *daily safe*
-coupon, regardless of how attractive the market odds look. The surprise lab
+lineups and substitution patterns. Amateur and regional tiers are excluded on
+top of that: the daily coupon is meant to run on senior competitive football,
+and those divisions are neither. They are all excluded from the *daily safe*
+coupon regardless of how attractive the market odds look. The surprise lab
 remains a separate process and can apply its own policy.
 """
 
@@ -15,6 +17,8 @@ _EXCLUDED_TOKENS = (
     "hazirlik",
     "friendly",
     "friendlies",
+    "amator",
+    "amateur",
     "u19",
     "u20",
     "u21",

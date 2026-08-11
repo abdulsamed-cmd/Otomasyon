@@ -170,14 +170,25 @@ XG_SYNC_POLL_INTERVAL_SECONDS = 60 * 60
 RESULT_FUZZY_THRESHOLD = 0.84
 
 # --- Contextual model / backtest ------------------------------------------
-MODEL_LOOKBACK_DAYS = 365
-MODEL_HALF_LIFE_DAYS = 60.0
-MODEL_PRIOR_MATCHES = 8.0
+# Memory settings measured on a June-August 2026 holdout. A 60-day half-life
+# left the median team with only 3.4 effective matches, but simply lengthening
+# it barely moved out-of-sample log loss; what actually helped was shrinking
+# each team harder toward its league baseline. The pair below was the best
+# combination tried (1X2 log loss 1.0545 and O/U 0.6825, against 1.0567 and
+# 0.6905 for the old settings).
+MODEL_LOOKBACK_DAYS = 540
+MODEL_HALF_LIFE_DAYS = 240.0
+MODEL_PRIOR_MATCHES = 35.0
 MODEL_MIN_TEAM_MATCHES = 6
 MODEL_MIN_EDGE = 0.04
+# Confidence is the share of a team's estimate that comes from its own matches
+# rather than the league prior, so its scale moves whenever the prior does.
+# Gates are therefore stated as a match count and converted, which keeps them
+# meaning the same thing after a shrinkage change.
+MODEL_MIN_CONFIDENCE_MATCHES = 6
 MODEL_ELO_K = 20.0
 MODEL_ELO_HOME_ADVANTAGE = 60.0
-MODEL_ELO_BLEND = 0.45
+MODEL_ELO_BLEND = 0.70
 # Blend observed goals with pre-existing match xG when available. xG belongs
 # only to training rows before the prediction cutoff.
 MODEL_XG_BLEND = 0.90
@@ -189,6 +200,19 @@ MODEL_GOAL_SHADOW_VERSION = "goal-elo-ou-v1"
 MODEL_WALK_FORWARD_VERSION = "xg-ou-v1-wf"
 MODEL_GATE_MIN_BETS = 200
 MODEL_GATE_MIN_ROI_CI_LOW = 0.0
+
+# --- Calibration layer -----------------------------------------------------
+# The layer pools the market price and the model on the log-odds scale and
+# measures what each is worth. Fitting needs a decent sample per market family
+# before its coefficients mean anything.
+CALIBRATION_MIN_SAMPLES = 2000
+# Days of history the nightly fit trains on, and the holdout it is scored on.
+CALIBRATION_FIT_DAYS = 400
+CALIBRATION_HOLDOUT_DAYS = 60
+# The model may only start influencing the stated probability once the fit
+# shows it saving at least this much log loss over the calibrated market on
+# its own holdout. Until then the layer reproduces the market on purpose.
+CALIBRATION_MIN_MODEL_GAIN = 0.002
 
 # Independent evidence gates. Main, alternative and surprise results are never
 # pooled because they represent different risk processes.

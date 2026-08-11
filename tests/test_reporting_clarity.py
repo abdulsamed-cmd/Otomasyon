@@ -6,6 +6,8 @@ and a single settled bet was printed with a zero-width confidence interval,
 which claims a precision the data cannot support.
 """
 
+import json
+
 from otomasyon import config, probability, service
 from otomasyon.engine import Coupon, Leg
 from otomasyon.iddaa.normalize import NormalizedEvent
@@ -200,3 +202,68 @@ def test_excluded_legacy_coupons_are_stated_not_hidden(tmp_path):
     assert "2 eski kupon (2 tutan) sayıma girmiyor" in service.model_status_text(
         path
     )
+
+
+def test_report_states_that_the_model_earns_no_weight_yet(tmp_path):
+    """"Trained" and "used" are different claims; the layer decides which."""
+    path = str(tmp_path / "calib.db")
+    with Database(path) as db:
+        db.set_setting(
+            "model_calibration",
+            json.dumps(
+                {
+                    "model_earns_weight": False,
+                    "markets": {
+                        "ou25": {
+                            "holdout": {
+                                "samples": 9094,
+                                "intercept": 0.0,
+                                "market_weight": 1.11,
+                                "model_weight": -0.005,
+                                "market_logloss": 0.6763,
+                                "model_logloss": 0.6831,
+                                "pooled_logloss": 0.6763,
+                                "model_contribution": 0.000009,
+                            }
+                        }
+                    },
+                }
+            ),
+        )
+        db.conn.commit()
+
+    text = service.calibration_text(path)
+    assert "ölçülebilir bilgi eklemiyor" in text
+    assert "model ağırlığı -0.01" in text
+    assert "MODEL HENÜZ KULLANILMIYOR" in service.model_influence_text(path)
+
+
+def test_report_says_the_model_is_in_use_once_it_earns_weight(tmp_path):
+    path = str(tmp_path / "earned.db")
+    with Database(path) as db:
+        db.set_setting(
+            "model_calibration",
+            json.dumps(
+                {
+                    "model_earns_weight": True,
+                    "markets": {
+                        "ou25": {
+                            "holdout": {
+                                "samples": 9094,
+                                "intercept": 0.0,
+                                "market_weight": 0.7,
+                                "model_weight": 0.55,
+                                "market_logloss": 0.676,
+                                "model_logloss": 0.669,
+                                "pooled_logloss": 0.665,
+                                "model_contribution": 0.011,
+                            }
+                        }
+                    },
+                }
+            ),
+        )
+        db.conn.commit()
+
+    assert "ağırlığı kazandı" in service.calibration_text(path)
+    assert service.model_influence_text(path) == "Kupon seçimi: MODEL kullanılıyor"

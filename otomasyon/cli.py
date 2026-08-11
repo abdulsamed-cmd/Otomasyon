@@ -384,6 +384,31 @@ def cmd_clubelo_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibration(args: argparse.Namespace) -> int:
+    report = service.refresh_calibration(args.db)
+    print("=== Kalibrasyon katmanı ===")
+    print(
+        f"Uydurma verisi: {report['fit_matches']} maç · "
+        f"ölçüm verisi: {report['holdout_matches']} maç"
+    )
+    for market, item in report["markets"].items():
+        values = item.get("holdout") or item["fit"]
+        print(f"\n{market}: {values['samples']} seçim")
+        print(
+            f"  piyasa ağırlığı {values['market_weight']:.3f} · "
+            f"model ağırlığı {values['model_weight']:+.3f}"
+        )
+        print(
+            f"  log kaybı — piyasa {values['market_logloss']:.5f} · "
+            f"model {values['model_logloss']:.5f} · "
+            f"harman {values['pooled_logloss']:.5f}"
+        )
+        print(f"  modelin katkısı: {values['model_contribution']:+.5f}")
+    print()
+    print(service.calibration_text(args.db).splitlines()[0])
+    return 0
+
+
 def cmd_coupon_replay(args: argparse.Namespace) -> int:
     from .replay import replay_daily
 
@@ -821,6 +846,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_model_refresh.add_argument("--force", action="store_true")
     p_model_refresh.set_defaults(func=cmd_model_refresh)
+
+    p_calibration = sub.add_parser(
+        "calibration",
+        help="Refit the market/model calibration layer and report its verdict",
+    )
+    p_calibration.set_defaults(func=cmd_calibration)
 
     p_shadow = sub.add_parser(
         "shadow-predict", help="Capture report-only xG O/U predictions"

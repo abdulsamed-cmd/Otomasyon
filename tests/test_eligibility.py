@@ -18,6 +18,12 @@ def test_youth_and_reserve_competitions_are_excluded():
     assert not is_daily_eligible("UEFA Youth League")
 
 
+def test_amateur_and_regional_tiers_are_excluded():
+    assert not is_daily_eligible("İngiltere Amatör İngiltere Güney Ligi, Merkez")
+    assert not is_daily_eligible("Almanya Amatör Bölgesel Lig Kuzey")
+    assert not is_daily_eligible("Amateur Regional League")
+
+
 def test_regular_and_womens_competitions_remain_eligible():
     assert is_daily_eligible("Belçika Pro Lig")
     assert is_daily_eligible("UEFA Şampiyonlar Ligi, Kadınlar")

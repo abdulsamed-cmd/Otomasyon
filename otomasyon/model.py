@@ -36,6 +36,15 @@ class GoalPrediction:
     xg_samples_home: int
     xg_samples_away: int
     probs: dict[str, float]
+def confidence_floor() -> float:
+    """Confidence a team reaches at ``MODEL_MIN_CONFIDENCE_MATCHES`` matches."""
+    matches = config.MODEL_MIN_CONFIDENCE_MATCHES
+    floor = matches / (matches + config.MODEL_PRIOR_MATCHES)
+    if matches < config.MODEL_MIN_TEAM_MATCHES:
+        floor *= matches / config.MODEL_MIN_TEAM_MATCHES
+    return floor
+
+
 def _poisson_probs(lam: float, max_goals: int = 10) -> list[float]:
     probs = [math.exp(-lam)]
     for goals in range(1, max_goals + 1):
@@ -395,7 +404,7 @@ def backtest(
             for c in candidates
             if config.LEG_MIN_ODD <= c[1] <= config.LEG_MAX_ODD
             and c[2] >= config.MODEL_MIN_EDGE
-            and pred.confidence >= 0.35
+            and pred.confidence >= confidence_floor()
             and (markets is None or c[3] in markets)
             and (outcomes is None or c[0] in outcomes)
         ]

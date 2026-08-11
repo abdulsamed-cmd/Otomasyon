@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 import math
 import hashlib
 import pickle
@@ -47,7 +48,11 @@ def get_live_events(force: bool = False):
 def daily_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
     events, competitions = get_live_events()
     now = datetime.now(tz=config.TIMEZONE)
-    coupons = engine.build_daily_coupons(events, now=now)
+    coupons = engine.build_daily_coupons(
+        events,
+        now=now,
+        probability_provider=calibrated_probability_provider(db_path),
+    )
     for_date = now.strftime("%Y-%m-%d")
 
     if save:
@@ -548,7 +553,7 @@ def capture_shadow_predictions(
 ) -> dict:
     """Persist separate goal/Elo and xG O/U shadow predictions."""
     from .eligibility import is_event_eligible
-    from .model import GoalModel
+    from .model import GoalModel, confidence_floor as model_confidence_floor
 
     now = now or datetime.now(tz=config.TIMEZONE)
     now_ts = int(now.timestamp())
@@ -606,7 +611,7 @@ def capture_shadow_predictions(
             prediction = model.predict(
                 event.home, event.away, event.competition_name
             )
-            if prediction.confidence < 0.35:
+            if prediction.confidence < model_confidence_floor():
                 continue
             if (
                 model_version == config.MODEL_SHADOW_VERSION
@@ -1357,21 +1362,25 @@ def excluded_coupon_summary(db_path: str) -> dict:
     }
 
 
-def model_influence_text() -> str:
+def model_influence_text(db_path: str | None = None) -> str:
     """State plainly whether the model picks the coupons yet.
 
-    The model is retrained every night regardless, but until its evidence gate
-    opens the daily coupons are still selected from bookmaker-implied fair
-    probabilities. Reporting training alone reads as if the model were already
-    choosing the selections.
+    The model is retrained every night regardless, but it only reaches the
+    coupon through the calibration layer, and only once that layer measures it
+    adding something the price does not already contain. Reporting training
+    alone reads as if the model were already choosing the selections.
     """
-    if config.MODEL_LIVE_ENABLED:
+    earned = bool(
+        db_path
+        and (stored_calibration(db_path) or {}).get("model_earns_weight")
+    )
+    if config.MODEL_LIVE_ENABLED or earned:
         return "Kupon seçimi: MODEL kullanılıyor"
     return (
         "Kupon seçimi: MODEL HENÜZ KULLANILMIYOR — kuponlar bahis "
         "oranlarından türetilen adil olasılıkla kuruluyor. Model her gece "
-        "eğitiliyor ve tahminleri gölgede ölçülüyor; kanıt eşiği geçilince "
-        "devreye alınacak."
+        "eğitiliyor ve tahminleri gölgede ölçülüyor; kalibrasyon katmanı "
+        "modelin piyasaya bilgi eklediğini ölçtüğünde devreye alınacak."
     )
 
 
@@ -1516,7 +1525,8 @@ def model_status_text(db_path: str) -> str:
         )
     else:
         lines.append("Son eğitim: henüz kayıt yok")
-    lines.append(model_influence_text())
+    lines.append(model_influence_text(db_path))
+    lines.append(calibration_text(db_path))
     labels = {
         "daily_main": "Ana kupon",
         "daily_alt": "Alternatif",
@@ -2068,7 +2078,79 @@ def auto_model_refresh(
         "skipped": False,
         "run": xg_run,
         "runs": runs,
+        "calibration": refresh_calibration(db_path, history=history, now_ts=now_ts),
     }
+
+
+def refresh_calibration(
+    db_path: str, *, history: list[dict] | None = None, now_ts: int | None = None
+) -> dict:
+    """Refit the market/model calibration layer and store what it decided."""
+    from .calibration import fit_calibration
+
+    now_ts = now_ts or int(datetime.now(tz=config.TIMEZONE).timestamp())
+    if history is None:
+        with Database(db_path) as db:
+            history = db.load_historical_matches(before_ts=now_ts)
+    report = fit_calibration(history, now_ts)
+    report["fitted_ts"] = now_ts
+    with Database(db_path) as db:
+        db.set_setting("model_calibration", json.dumps(report))
+        db.conn.commit()
+    return report
+
+
+def stored_calibration(db_path: str) -> dict | None:
+    with Database(db_path) as db:
+        raw = db.get_setting("model_calibration")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def calibration_text(db_path: str) -> str:
+    """State what the calibration layer measured, in plain terms."""
+    report = stored_calibration(db_path)
+    if not report:
+        return "Kalibrasyon: henüz ölçüm yok"
+    lines = []
+    for market, label in (("1x2", "Maç Sonucu"), ("ou25", "Alt/Üst 2.5")):
+        item = (report.get("markets") or {}).get(market)
+        if not item:
+            continue
+        values = item.get("holdout") or item.get("fit")
+        lines.append(
+            f"  {label}: piyasa ağırlığı {values['market_weight']:.2f} · "
+            f"model ağırlığı {values['model_weight']:+.2f} · "
+            f"modelin katkısı {values['model_contribution']:+.4f} "
+            f"({values['samples']} seçim)"
+        )
+    verdict = (
+        "Kalibrasyon: model ölçülen ağırlığı kazandı, olasılıklara katılıyor"
+        if report.get("model_earns_weight")
+        else (
+            "Kalibrasyon: model piyasanın fiyatına ölçülebilir bilgi eklemiyor, "
+            "bu yüzden olasılık piyasadan alınıyor"
+        )
+    )
+    return "\n".join([verdict, *lines])
+
+
+def calibrated_probability_provider(db_path: str):
+    """The coupon's probability source, if the model has earned a say."""
+    from .calibration import provider_from_report
+
+    report = stored_calibration(db_path)
+    if not report or not report.get("model_earns_weight"):
+        return None
+    with Database(db_path) as db:
+        artifact = db.load_model_artifact(config.MODEL_SHADOW_VERSION)
+    if not artifact:
+        return None
+    return provider_from_report(report, pickle.loads(artifact["payload"]))
 
 
 def latest_model_training(db_path: str) -> dict | None:
