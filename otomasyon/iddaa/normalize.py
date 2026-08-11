@@ -26,6 +26,10 @@ class NormalizedMarket:
     sov: str | None
     status: int
     selections: list[NormalizedSelection] = field(default_factory=list)
+    # Minimum Bahis Sayısı: how many matches a coupon must hold before this
+    # market may be part of it. iddaa refuses the slip below it, so a market
+    # priced at ``mbs=2`` simply cannot be played on its own.
+    mbs: int = 1
 
     @property
     def code(self) -> tuple[int, int]:
@@ -98,6 +102,9 @@ def normalize_event(
                 sov=sov,
                 status=m.get("s", 0),
                 selections=selections,
+                # A market carries its own limit and it is not always the
+                # event's, so the market's own value is the one that binds.
+                mbs=int(m.get("mbc") or raw.get("mbc") or 1),
             )
         )
     return NormalizedEvent(

@@ -81,3 +81,30 @@ def test_normalize_events_structure():
     ou = e.market((2, 101))
     assert ou.name == "Alt/Üst 2.5"
     assert [s.name for s in ou.selections] == ["Alt", "Üst"]
+
+
+def test_minimum_bet_count_is_read_per_market():
+    raw = [
+        {
+            **RAW_EVENTS[0],
+            "mbc": 2,
+            "m": [
+                {**RAW_EVENTS[0]["m"][0], "mbc": 3},
+                {**RAW_EVENTS[0]["m"][1], "mbc": 1},
+            ],
+        }
+    ]
+    event = normalize_events(raw, _resolver(), build_competitions_map(RAW_COMPETITIONS))[0]
+    assert event.market((1, 1)).mbs == 3
+    assert event.market((2, 101)).mbs == 1
+
+
+def test_a_market_without_its_own_limit_inherits_the_events():
+    raw = [{**RAW_EVENTS[0], "mbc": 2, "m": [dict(RAW_EVENTS[0]["m"][0])]}]
+    event = normalize_events(raw, _resolver(), build_competitions_map(RAW_COMPETITIONS))[0]
+    assert event.market((1, 1)).mbs == 2
+
+
+def test_a_feed_that_never_mentions_the_limit_leaves_markets_playable_alone():
+    event = normalize_events(RAW_EVENTS, _resolver(), build_competitions_map(RAW_COMPETITIONS))[0]
+    assert all(market.mbs == 1 for market in event.markets)

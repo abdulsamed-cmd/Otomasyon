@@ -28,7 +28,7 @@ def format_coupon(title: str, coupon) -> str:
         lines.append(
             f"  • [{_hm(leg.start_ts)}] {leg.home} - {leg.away}\n"
             f"      {leg.market_name}: {leg.outcome_name} @ {leg.odd}  "
-            f"(piyasa %{leg.fair_prob * 100:.0f} veriyor)"
+            f"(MBS {leg.mbs}, piyasa %{leg.fair_prob * 100:.0f} veriyor)"
         )
     return "\n".join(lines)
 

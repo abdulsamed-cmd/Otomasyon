@@ -82,6 +82,43 @@ def test_main_takes_the_likeliest_selection_that_clears_the_floor():
     assert main.legs[0].odd == 1.60
 
 
+def _mbs_event(event_id: int, alt_odd: float, ust_odd: float, mbs: int):
+    event = _ou_event(event_id, alt_odd, ust_odd)
+    event.markets[0].mbs = mbs
+    return event
+
+
+def test_a_leg_iddaa_will_not_accept_alone_cannot_carry_a_single():
+    # The likeliest selection on the board needs two matches on the slip, so a
+    # single has to fall back to the weaker one that may be played on its own.
+    events = [
+        _mbs_event(1, 1.55, 2.45, mbs=2),
+        _mbs_event(2, 1.75, 2.10, mbs=1),
+    ]
+    main = engine.build_daily_coupons(events, now=NOW)["main"]
+    assert len(main.legs) == 1
+    assert main.legs[0].event_id == 2
+    assert main.legs[0].odd == 1.75
+
+
+def test_a_restricted_leg_is_allowed_once_the_coupon_is_long_enough():
+    events = [
+        _mbs_event(1, 1.45, 2.60, mbs=2),
+        _mbs_event(2, 1.40, 2.75, mbs=2),
+    ]
+    main = engine.build_daily_coupons(events, now=NOW)["main"]
+    assert len(main.legs) == 2
+    assert all(leg.mbs == 2 for leg in main.legs)
+    assert len(main.legs) >= max(leg.mbs for leg in main.legs)
+
+
+def test_a_market_nobody_can_reach_produces_no_coupon():
+    # Three matches on the board but every market demands four, so there is
+    # nothing here that could be handed over a counter.
+    events = [_mbs_event(index, 1.45, 2.60, mbs=4) for index in range(1, 4)]
+    assert engine.build_daily_coupons(events, now=NOW)["main"] is None
+
+
 def test_no_upper_bound_stops_a_coupon_from_paying_more_than_asked():
     # The favourite sits under the floor, so the only selection that clears it
     # pays 2.60 - well past what was asked for, and still accepted.

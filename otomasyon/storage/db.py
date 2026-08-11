@@ -40,7 +40,17 @@ class Database:
         ]
         self._migrate_telegram_delivery_receipts(after_columns)
         self._migrate_telegram_bot_runtime()
+        self._migrate_market_mbs()
         self.conn.commit()
+
+    def _migrate_market_mbs(self) -> None:
+        """Add the minimum-bet-count column to markets stored before it."""
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(markets)")}
+        if "mbs" not in columns:
+            with self.conn:
+                self.conn.execute(
+                    "ALTER TABLE markets ADD COLUMN mbs INTEGER NOT NULL DEFAULT 1"
+                )
 
     def _migrate_telegram_bot_runtime(self) -> None:
         """Add poll-health columns to runtime tables created before them."""
@@ -160,13 +170,14 @@ class Database:
                 sov_key = "" if mk.sov is None else mk.sov
                 cur.execute(
                     """
-                    INSERT INTO markets (event_id, t, st, sov, name, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO markets (event_id, t, st, sov, name, status, mbs)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(event_id, t, st, sov) DO UPDATE SET
                         name = excluded.name,
-                        status = excluded.status
+                        status = excluded.status,
+                        mbs = excluded.mbs
                     """,
-                    (ev.event_id, mk.t, mk.st, sov_key, mk.name, mk.status),
+                    (ev.event_id, mk.t, mk.st, sov_key, mk.name, mk.status, mk.mbs),
                 )
                 market_row = cur.execute(
                     "SELECT id FROM markets WHERE event_id=? AND t=? AND st=? AND sov=?",

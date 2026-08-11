@@ -1,14 +1,19 @@
 """Daily coupon engine.
 
 Each coupon answers one question: **what is the likeliest thing we can build
-that pays at least X?** The main coupon exists to land often and asks for a
-modest payout; the alternative asks for 2.00 or more.
+that pays at least X, and can actually be played?** The main coupon exists to
+land often and asks for a modest payout; the alternative asks for 2.00 or more.
 
 Within that, nothing is prescribed. Leg count is free from 1 to
 ``DAILY_MAX_LEGS``, there is no upper bound on the payout, and every size is
 searched and compared rather than stopping at the first that fits. A coupon
 still takes at most one selection per match, so no two legs move together, and
 draws only from markets we can grade.
+
+The binding rule is iddaa's own: every market carries a Minimum Bahis Sayısı,
+and a coupon shorter than a leg's MBS is refused at the counter. So each leg
+count is searched over only the legs that count admits - a market at ``mbs=2``
+is invisible to the single-leg search, however likely it is.
 
 Win probability comes from ``probability_provider`` when one is supplied - that
 is where a model's opinion enters. With no provider the engine falls back to
@@ -47,6 +52,10 @@ class Leg:
     odd: float
     # What the market implies once its margin is removed.
     fair_prob: float
+    # How many matches a coupon must hold before this leg may join it. The
+    # archive never recorded it, so replayed history defaults to 1 and cannot
+    # answer what iddaa would have accepted on the day.
+    mbs: int = 1
     # What we believe. Ranking uses this; ``fair_prob`` stays as the market's
     # own number so the two can always be compared. Left unset it *is* the
     # market's number, because that is our belief until a model earns the right
@@ -157,6 +166,7 @@ def candidate_legs_for_event(event: NormalizedEvent, probability_provider=None) 
                     outcome_no=selection.outcome_no,
                     outcome_name=selection.name,
                     odd=odd,
+                    mbs=market.mbs,
                     fair_prob=fair,
                     win_prob=belief,
                 )
@@ -279,9 +289,13 @@ def _best_coupon(
     into the coupon, which usually makes them lose, but that is left to the
     measurement rather than assumed.
     """
-    legs = [leg for leg in pool if leg.event_id not in exclude_events]
+    available = [leg for leg in pool if leg.event_id not in exclude_events]
     best = None
     for size in range(config.DAILY_MIN_LEGS, config.DAILY_MAX_LEGS + 1):
+        # A leg iddaa will not accept in a coupon this short is not a leg here.
+        legs = [leg for leg in available if leg.mbs <= size]
+        if len(legs) < size:
+            continue
         if size == 1:
             candidate = _best_single(legs, min_odds, min_expected_value)
         elif size == 2:

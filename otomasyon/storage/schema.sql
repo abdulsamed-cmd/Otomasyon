@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS markets (
     sov         TEXT,
     name        TEXT NOT NULL,
     status      INTEGER NOT NULL,
+    -- Minimum Bahis Sayısı: shortest coupon iddaa will accept this market in.
+    mbs         INTEGER NOT NULL DEFAULT 1,
     UNIQUE (event_id, t, st, sov),
     FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 );
