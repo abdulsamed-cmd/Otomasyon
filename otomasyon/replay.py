@@ -120,6 +120,28 @@ def _settle_replay_coupon(
     }
 
 
+def _any_hit_summary(coupons: list[dict]) -> dict:
+    """How often a delivered day landed at least one of its coupons.
+
+    This is the day-level view: two coupons that both lose count once, not
+    twice, so it answers "did today's delivery land" rather than "how did an
+    average coupon do".
+    """
+    by_day: dict[str, list[dict]] = {}
+    for coupon in coupons:
+        if coupon["status"] in ("won", "lost"):
+            by_day.setdefault(coupon["for_date"], []).append(coupon)
+    days = len(by_day)
+    hits = sum(
+        any(coupon["status"] == "won" for coupon in day) for day in by_day.values()
+    )
+    return {
+        "days": days,
+        "days_with_a_win": hits,
+        "rate": hits / days if days else 0.0,
+    }
+
+
 def _summary(coupons: list[dict], total_days: int) -> dict:
     decided = [coupon for coupon in coupons if coupon["status"] in ("won", "lost")]
     profits = [coupon["profit"] for coupon in decided]
@@ -157,8 +179,10 @@ def replay_daily(
     calibrated: bool = False,
     calibration_prior: float = 100.0,
     min_expected_value: float | None = None,
+    odds_band: tuple[float, float] | None = None,
 ) -> dict:
     """Generate and settle main/alternative coupons for every calendar day."""
+    band = odds_band or engine.default_odds_band()
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
     probability_provider = None
@@ -196,6 +220,7 @@ def replay_daily(
             now=now,
             probability_provider=probability_provider,
             min_expected_value=min_expected_value,
+            odds_band=band,
         )
         if coupons["main"]:
             main_results.append(
@@ -210,6 +235,7 @@ def replay_daily(
     total_days = (end - start).days + 1
     combined = main_results + alt_results
     return {
+        "daily_any_hit": _any_hit_summary(combined),
         "method": "closing_odds_partial",
         "limitations": [
             "archive odds are final pre-match odds, not the 10:00 snapshot",
@@ -221,6 +247,7 @@ def replay_daily(
         "calibrated": calibrated,
         "calibration_prior": calibration_prior if calibrated else None,
         "min_expected_value": min_expected_value,
+        "odds_band": band,
         "main": _summary(main_results, total_days),
         "alternative": _summary(alt_results, total_days),
         "combined": _summary(combined, total_days * 2),

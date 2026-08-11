@@ -153,8 +153,12 @@ def _select_pool(
     return pool
 
 
-def _in_window(total: float) -> bool:
-    return config.DAILY_MIN_TOTAL_ODDS <= total <= config.DAILY_MAX_TOTAL_ODDS
+def default_odds_band() -> tuple[float, float]:
+    return (config.DAILY_MIN_TOTAL_ODDS, config.DAILY_MAX_TOTAL_ODDS)
+
+
+def _in_window(total: float, band: tuple[float, float]) -> bool:
+    return band[0] <= total <= band[1]
 
 
 def _acceptable(prob: float, total: float, min_expected_value: float | None) -> bool:
@@ -164,10 +168,10 @@ def _acceptable(prob: float, total: float, min_expected_value: float | None) -> 
     )
 
 
-def _best_single(legs, min_expected_value):
+def _best_single(legs, band, min_expected_value):
     best = None
     for leg in legs:
-        if not _in_window(leg.odd):
+        if not _in_window(leg.odd, band):
             continue
         if not _acceptable(leg.fair_prob, leg.odd, min_expected_value):
             continue
@@ -176,7 +180,7 @@ def _best_single(legs, min_expected_value):
     return best
 
 
-def _best_pair(legs, min_expected_value):
+def _best_pair(legs, band, min_expected_value):
     """Best two-leg build, over the full pool.
 
     The partners of a leg form a contiguous slice once the pool is sorted by
@@ -186,8 +190,8 @@ def _best_pair(legs, min_expected_value):
     odds = [leg.odd for leg in ordered]
     best = None
     for index, first in enumerate(ordered):
-        low = config.DAILY_MIN_TOTAL_ODDS / first.odd
-        high = config.DAILY_MAX_TOTAL_ODDS / first.odd
+        low = band[0] / first.odd
+        high = band[1] / first.odd
         start = max(index + 1, bisect_left(odds, low))
         for second in ordered[start : bisect_right(odds, high)]:
             if second.event_id == first.event_id:
@@ -201,7 +205,7 @@ def _best_pair(legs, min_expected_value):
     return best
 
 
-def _best_combo(legs, size, min_expected_value):
+def _best_combo(legs, size, band, min_expected_value):
     """Best build of ``size`` legs, over the safest ``COMBO_CAP`` legs."""
     top = sorted(legs, key=lambda leg: leg.fair_prob, reverse=True)[: config.COMBO_CAP]
     best = None
@@ -209,7 +213,7 @@ def _best_combo(legs, size, min_expected_value):
         if len({leg.event_id for leg in combo}) != size:
             continue
         total = probability.total_odds(leg.odd for leg in combo)
-        if not _in_window(total):
+        if not _in_window(total, band):
             continue
         prob = probability.combined_probability(leg.fair_prob for leg in combo)
         if not _acceptable(prob, total, min_expected_value):
@@ -222,6 +226,7 @@ def _best_combo(legs, size, min_expected_value):
 def _best_coupon(
     pool: list[Leg],
     exclude_events: set[int],
+    band: tuple[float, float],
     min_expected_value: float | None = None,
 ) -> Coupon | None:
     """Highest joint fair probability that lands inside the odds band.
@@ -233,11 +238,11 @@ def _best_coupon(
     legs = [leg for leg in pool if leg.event_id not in exclude_events]
     for size in range(config.DAILY_MIN_LEGS, config.DAILY_MAX_LEGS + 1):
         if size == 1:
-            best = _best_single(legs, min_expected_value)
+            best = _best_single(legs, band, min_expected_value)
         elif size == 2:
-            best = _best_pair(legs, min_expected_value)
+            best = _best_pair(legs, band, min_expected_value)
         else:
-            best = _best_combo(legs, size, min_expected_value)
+            best = _best_combo(legs, size, band, min_expected_value)
         if best is None:
             continue
         chosen = best[1]
@@ -252,8 +257,10 @@ def build_daily_coupons(
     now: datetime | None = None,
     probability_provider=None,
     min_expected_value: float | None = None,
+    odds_band: tuple[float, float] | None = None,
 ) -> dict[str, Coupon | None]:
     """Return {'main': Coupon|None, 'alt': Coupon|None} for the given bulletin."""
+    band = odds_band or default_odds_band()
     now = now or datetime.now(tz=config.TIMEZONE)
     now_ts = int(now.timestamp())
     end_of_today = now.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -266,7 +273,10 @@ def build_daily_coupons(
         pool = _select_pool(events, now_ts, until_ts, probability_provider)
 
     main = _best_coupon(
-        pool, exclude_events=set(), min_expected_value=min_expected_value
+        pool,
+        exclude_events=set(),
+        band=band,
+        min_expected_value=min_expected_value,
     )
     if main:
         main.kind = "daily_main"
@@ -275,6 +285,7 @@ def build_daily_coupons(
         alt = _best_coupon(
             pool,
             exclude_events=main.event_ids,
+            band=band,
             min_expected_value=min_expected_value,
         )
         if alt:
