@@ -308,3 +308,76 @@ def test_a_favourite_coupon_drops_the_underdog_warning():
         {"main": _coupon_at(0.606, 1.40), "alt": None}, "2026-08-11"
     )
     assert "daha az ihtimal verdiği taraftadır" not in text
+
+
+COMPETITIONS = {-1: {"name": "Lig", "country_code": "TR"}}
+
+
+def _stub_build(monkeypatch, coupons, for_date):
+    now = datetime.now(tz=config.TIMEZONE)
+    # Kick off tonight: a coupon whose match has started can no longer be
+    # replaced, which is a separate rule from the one under test here.
+    kickoff = int(now.timestamp()) + 3600
+    monkeypatch.setattr(service, "capture_shadow_predictions", lambda *a, **k: None)
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda _path: (
+            coupons,
+            [_event(1, kickoff), _event(2, kickoff)],
+            COMPETITIONS,
+            now,
+            for_date,
+        ),
+    )
+
+
+def test_asking_again_returns_the_coupon_on_record_not_a_second_build(
+    tmp_path, monkeypatch
+):
+    """The evening answer must be the slip that will actually be settled.
+
+    A later build is a different coupon at different prices, and the day's
+    coupon is already stored, so its legs are never written down: shown as the
+    day's coupon it would be watched, and then never graded or reported on.
+    """
+    path = str(tmp_path / "record.db")
+    for_date = "2026-08-11"
+
+    _stub_build(monkeypatch, {"main": _coupon("daily_main", 1), "alt": None}, for_date)
+    morning = service.daily_text(path)
+    assert "Ev1 - Dep1" in morning
+
+    _stub_build(monkeypatch, {"main": _coupon("daily_main", 2), "alt": None}, for_date)
+    evening = service.daily_text(path)
+    assert "Ev1 - Dep1" in evening
+    assert "Ev2 - Dep2" not in evening
+
+    with Database(path) as db:
+        stored = db.daily_coupons_of_record(for_date)
+    assert [row["event_id"] for row in stored["daily_main"]] == [1]
+
+
+def test_a_rebuild_is_answered_with_the_replacement(tmp_path, monkeypatch):
+    path = str(tmp_path / "rebuild.db")
+    for_date = "2026-08-11"
+
+    _stub_build(monkeypatch, {"main": _coupon("daily_main", 1), "alt": None}, for_date)
+    service.daily_text(path)
+
+    _stub_build(monkeypatch, {"main": _coupon("daily_main", 2), "alt": None}, for_date)
+    assert "Ev2 - Dep2" in service.daily_text(path, rebuild=True)
+
+
+def test_the_days_coupon_carries_the_results_it_already_has(tmp_path, monkeypatch):
+    path = str(tmp_path / "results.db")
+    for_date = "2026-08-11"
+    _stub_build(monkeypatch, {"main": _coupon("daily_main", 1), "alt": None}, for_date)
+    service.daily_text(path)
+
+    # 0-0 is under 3.5, so the stored leg has won by the time it is asked for.
+    with Database(path) as db:
+        db.save_result(MatchResult(1, 0, 0))
+    service.settle_pending(path, None, notify=False)
+
+    assert "→ tuttu" in service.daily_text(path)

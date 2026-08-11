@@ -104,6 +104,16 @@ def coupons_of_record(db_path: str, for_date: str) -> dict:
     return out
 
 
+def leg_results_of_record(db_path: str, for_date: str) -> dict:
+    """How the day's stored coupons are doing, leg by leg, in leg order."""
+    with Database(db_path) as db:
+        stored = db.daily_coupons_of_record(for_date)
+    return {
+        ("main" if kind == "daily_main" else "alt"): [row["result"] for row in legs]
+        for kind, legs in stored.items()
+    }
+
+
 def daily_picks(coupons) -> str:
     """What the reader is being told to play, ignoring how it is priced.
 
@@ -127,12 +137,27 @@ def daily_picks(coupons) -> str:
 def daily_text(
     db_path: str = config.DB_PATH, *, save: bool = True, rebuild: bool = False
 ) -> str:
+    """Today's coupon, as asked for at any hour of the day.
+
+    A build is still run because it is what puts the day's coupon on record in
+    the first place, and it is also what captures the shadow predictions. But
+    the answer is read back off the record rather than off the build: once the
+    day has a coupon, a later build is a different slip at different prices
+    that was never written down, so nothing would ever settle it or tell the
+    reader how it did. `rebuild` replaces the record and is therefore answered
+    with the replacement; `save=False` asks for a build on purpose and gets it.
+    """
     coupons, events, competitions, now, for_date = _build_daily(db_path)
-    if save:
-        _persist_daily(
-            db_path, coupons, events, competitions, now, for_date, rebuild=rebuild
-        )
-    return formatting.format_daily(coupons, for_date)
+    if not save:
+        return formatting.format_daily(coupons, for_date)
+    _persist_daily(
+        db_path, coupons, events, competitions, now, for_date, rebuild=rebuild
+    )
+    return formatting.format_daily(
+        coupons_of_record(db_path, for_date),
+        for_date,
+        results=leg_results_of_record(db_path, for_date),
+    )
 
 
 def surprise_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:

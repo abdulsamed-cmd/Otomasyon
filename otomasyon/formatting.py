@@ -15,7 +15,7 @@ def _dm(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=config.TIMEZONE).strftime("%d.%m %H:%M")
 
 
-def format_coupon(title: str, coupon) -> str:
+def format_coupon(title: str, coupon, results=None) -> str:
     if coupon is None:
         return f"{title}: uygun kupon bulunamadı."
     lines = [
@@ -24,26 +24,31 @@ def format_coupon(title: str, coupon) -> str:
         f"{len(coupon.legs)} maç  |  "
         f"kupon marjı %{coupon.cumulative_margin * 100:.1f}"
     ]
-    for leg in coupon.legs:
-        lines.append(
+    for index, leg in enumerate(coupon.legs):
+        line = (
             f"  • [{_hm(leg.start_ts)}] {leg.home} - {leg.away}\n"
-            f"      {leg.market_name}: {leg.outcome_name} @ {leg.odd}  "
+            f"      {leg.market_name}: {leg.outcome_name} @ {leg.odd:.2f}  "
             f"(MBS {leg.mbs}, piyasa %{leg.fair_prob * 100:.0f} veriyor)"
         )
+        result = results[index] if results and index < len(results) else None
+        if result and result != "pending":
+            line += f"  → {_LEG_LABELS.get(result, result)}"
+        lines.append(line)
     return "\n".join(lines)
 
 
-def format_daily(coupons: dict, for_date: str) -> str:
+def format_daily(coupons: dict, for_date: str, results: dict | None = None) -> str:
     if not coupons.get("main") and not coupons.get("alt"):
         return (
             f"Günün kuponu ({for_date}) henüz hazır değil.\n"
             f"En az {config.DAILY_MAIN_MIN_ODDS:.2f} ödeyen uygun kurgu "
             "bulunamadı."
         )
+    results = results or {}
     parts = [f"GÜNÜN DÜŞÜK RİSKLİ KUPONLARI ({for_date})", ""]
-    parts.append(format_coupon("ANA KUPON", coupons.get("main")))
+    parts.append(format_coupon("ANA KUPON", coupons.get("main"), results.get("main")))
     parts.append("")
-    parts.append(format_coupon("ALTERNATİF", coupons.get("alt")))
+    parts.append(format_coupon("ALTERNATİF", coupons.get("alt"), results.get("alt")))
     parts.append("")
     main = coupons.get("main")
     if main and main.combined_prob < 0.5:
@@ -101,7 +106,7 @@ def format_settlement(coupon: dict, settlement) -> str:
         teams = f"{leg.get('home','?')} - {leg.get('away','?')}"
         lines.append(
             f"  • {teams} | {leg.get('market_name')}: "
-            f"{leg.get('outcome_name')} @ {leg.get('odd')} → "
+            f"{leg.get('outcome_name')} @ {leg.get('odd'):.2f} → "
             f"{_LEG_LABELS.get(leg_res.result, leg_res.result)}"
         )
     return "\n".join(lines)
