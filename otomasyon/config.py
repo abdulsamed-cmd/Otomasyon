@@ -24,6 +24,9 @@ WEATHER_RETRIES = 6
 WEATHER_BACKOFF = 5.0  # seconds, exponential base
 # Politeness gap between venue requests during a backfill.
 WEATHER_REQUEST_GAP = 1.0
+# A forecast a day or two out barely moves, so collecting it is a few-times-a-day
+# job rather than a per-cycle one.
+WEATHER_POLL_INTERVAL_SECONDS = 6 * 3600
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"

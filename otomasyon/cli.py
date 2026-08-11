@@ -100,6 +100,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         push_callback=lambda: service.push_daily(args.db, client),
         result_callback=lambda: service.auto_results(args.db, client),
         context_callback=lambda: service.capture_fotmob_context(args.db),
+        weather_callback=lambda: service.collect_weather(args.db),
         liveness_callback=lambda: service.check_bot_liveness(args.db, client),
         notification_callback=lambda: service.deliver_pending_notifications(
             args.db, client
@@ -491,7 +492,10 @@ def cmd_fotmob_context(args: argparse.Namespace) -> int:
 
 def cmd_weather(args: argparse.Namespace) -> int:
     report = service.collect_weather(
-        args.db, venue_limit=args.venue_limit, horizon_days=args.days
+        args.db,
+        venue_limit=args.venue_limit,
+        horizon_days=args.days,
+        force=True,
     )
     print("=== Maç günü hava verisi (RAPOR MODU) ===")
     print(

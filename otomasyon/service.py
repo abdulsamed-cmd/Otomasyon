@@ -2101,6 +2101,7 @@ def collect_weather(
     now: datetime | None = None,
     venue_limit: int = 60,
     horizon_days: int = 3,
+    force: bool = False,
 ) -> dict:
     """Learn where today's teams play, then what the sky will do there.
 
@@ -2116,10 +2117,25 @@ def collect_weather(
     weather_client = weather_client or OpenMeteoClient()
     now = now or datetime.now(tz=config.TIMEZONE)
     today = now.date()
-    report = {"resolved": 0, "already_known": 0, "days": 0, "errors": []}
+    now_ts = int(now.timestamp())
+    report = {
+        "resolved": 0,
+        "already_known": 0,
+        "playing": 0,
+        "days": 0,
+        "skipped": False,
+        "errors": [],
+    }
 
     with Database(db_path) as db:
+        last = int(db.get_setting("last_weather_ts") or 0)
         known = db.load_venues()
+    # A forecast that far ahead barely moves, and the run costs a minute of
+    # requests, so it is not worth doing on every scheduler cycle.
+    if not force and now_ts - last < config.WEATHER_POLL_INTERVAL_SECONDS:
+        report["skipped"] = True
+        report["already_known"] = len(known)
+        return report
 
     playing: set[str] = set()
     wanted: dict[str, int] = {}
@@ -2176,6 +2192,8 @@ def collect_weather(
             time.sleep(config.WEATHER_REQUEST_GAP)
         if observations:
             db.save_venue_weather(observations)
+        db.set_setting("last_weather_ts", str(now_ts))
+        db.conn.commit()
         report["days"] = len(observations)
     return report
 

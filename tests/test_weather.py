@@ -119,6 +119,29 @@ def test_a_day_with_a_missing_reading_is_not_offered_as_a_calm_one(tmp_path):
         assert db.load_venue_weather() == {}
 
 
+def test_a_recent_collection_is_not_repeated_on_the_next_cycle(tmp_path):
+    from datetime import datetime
+
+    from otomasyon import service
+
+    path = str(tmp_path / "test.db")
+    now = datetime.now(tz=config.TIMEZONE)
+    with Database(path) as db:
+        db.set_setting("last_weather_ts", str(int(now.timestamp())))
+        db.conn.commit()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("no request should be made")
+
+    report = service.collect_weather(
+        path,
+        fotmob_client=type("C", (), {"fetch_date": explode, "_get": explode})(),
+        weather_client=type("W", (), {"forecast": explode})(),
+        now=now,
+    )
+    assert report["skipped"] is True
+
+
 def test_context_points_opposite_ways_for_opposite_selections():
     weather = {("testteam", "2026-08-11"): (4.2, 31.0)}
     over = weather_context(weather, "testteam", "2026-08-11", 1.0)

@@ -286,6 +286,52 @@ AUC `0,483`, yani rastgeleden iyi değil). Katman kalıcı olarak bağlıdır: m
 holdout'ta ölçülebilir katkı üretmeye başladığı gün ağırlığı kendiliğinden
 alır, kod değişmesi gerekmez.
 
+### Bağlam: ne aradık, ne bulduk
+
+"Model bizim göremediğimizi görsün" fikri bir ölçüm sorusudur, ve bu depoda
+ölçüldü. Aşağıdaki her satır, piyasa fiyatının **üstüne** ne kattığını kendi
+holdout'unda verir. Hiçbiri kayda değer bir şey katmadı:
+
+| bağlam                                   | veri            | fiyat üstüne katkısı |
+| ---------------------------------------- | --------------- | -------------------- |
+| dinlenme günü, fikstür yoğunluğu, form   | 62 bin maç      | `+0,00005` log kaybı |
+| aynısı, lig büyüklüğüne göre ayrılmış    | 4 dilim         | her dilimde `≈0`     |
+| gol modeli (Poisson + Elo + xG)          | 63 bin seçim    | her veri diliminde negatif |
+| maç günü yağmuru ve rüzgârı              | 24 bin maç      | `1x2 +0,00007`, `ou25 −0,00111` |
+
+Yağmurun **gerçek** ama küçük bir etkisi var: aynı lig içinde yağmurlu maçlarda
+2.5 Üst piyasadan `+2,3` puan daha sık geliyor (`2,1` sigma). Ancak bu, kupon
+sonucunu değiştirecek kadar büyük değil. Aralık 2025 – Ağustos 2026 replay'inde
+hava bilgisi ana kuponu `%53,0`'ten `%56,3`'e çıkarmış *görünüyor*; fakat aynı
+dağılımdan çekilmiş **sahte** hava verisiyle yapılan 8 plasebo koşusu `%48,7` ile
+`%57,0` arasında sonuç veriyor. Yani iyileşme havadan değil, 151 kuponluk bir
+örneklemde sıralamayı sarsmaktan geliyor.
+
+Kadro, sakat ve cezalı bilgisi ise ölçülemedi çünkü **kupon saatinde yok**:
+FotMob'da kesin 11'ler (`standard`) ancak maç başlarken beliriyor, saat 10:00'da
+elde en fazla "tahmini kadro" oluyor — o da herkese açık ve fiyata girmiş.
+
+Bu yüzden kupon şu an fiyat alıcıdır. Ölçüm makinesi yerinde duruyor: her gece
+kalibrasyon katmanı piyasayı, modeli ve bağlamı yeniden tartıyor, bunlardan biri
+holdout'ta ölçülebilir katkı üretmeye başladığı gün ağırlığını kendiliğinden
+alıyor.
+
+### Maç günü hava verisi
+
+`weather` komutu iki adımda çalışır: bir takımın stadyum koordinatını FotMob'dan
+bir kez çözer, sonra Open-Meteo'ya o noktada gökyüzünün ne yaptığını (ya da ne
+yapacağını) sorar. Open-Meteo anahtar istemez ve hem geçmiş arşivi hem tahmini
+verir — aynı özelliğin geçmiş maçlarda ölçülüp yarınki maç için söylenebilmesini
+sağlayan şey budur.
+
+Şu an `805` stadyum ve `423` binden fazla günlük yağmur/rüzgâr kaydı var.
+Zamanlayıcı bunu 6 saatte bir tazeler; koordinat bir kez çözülür ve bir daha
+istek harcamaz.
+
+```bash
+python3 -m otomasyon.cli weather --venue-limit 60 --days 3
+```
+
 Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/sistem
 kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
 Her iki süreç de hazırlık, genç, amatör/bölgesel ve rezerv liglerin yanında

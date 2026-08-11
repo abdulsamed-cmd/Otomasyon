@@ -28,6 +28,7 @@ class Scheduler:
         push_callback: Callable[[], object],
         result_callback: Callable[[], object],
         context_callback: Callable[[], object],
+        weather_callback: Callable[[], object] | None = None,
         liveness_callback: Callable[[], object] | None = None,
         notification_callback: Callable[[], object] | None = None,
         interval: float,
@@ -48,6 +49,11 @@ class Scheduler:
             ScheduledCallback("daily push", push_callback),
             ScheduledCallback("result polling", result_callback),
             ScheduledCallback("context capture", context_callback),
+            *(
+                (ScheduledCallback("weather", weather_callback),)
+                if weather_callback is not None
+                else ()
+            ),
             # Draining runs last so anything queued earlier in this cycle,
             # including a just-settled coupon, goes out without waiting.
             *(
