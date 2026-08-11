@@ -28,7 +28,9 @@
     <div class="leg-index">{{ loop.index }}</div>
     <div class="leg-main">
       <h3>{{ leg.home }} — {{ leg.away }}</h3>
-      <p>{{ leg.market_name }}{% if leg.market_sov %} · {{ leg.market_sov }}{% endif %}</p>
+      {# iddaa already writes the line into most market names, so it is only
+         appended when the name does not carry it. #}
+      <p>{{ leg.market_name }}{% if leg.market_sov and leg.market_sov not in leg.market_name %} · {{ leg.market_sov }}{% endif %}</p>
     </div>
     <div class="pick"><span>Seçim</span><b>{{ leg.outcome_name }}</b></div>
     <div class="pick"><span>Oran</span><b>{{ "%.2f"|format(leg.odd_at_creation) }}</b></div>

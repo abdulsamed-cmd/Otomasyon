@@ -133,6 +133,35 @@ def test_a_coupon_from_before_the_rule_does_not_claim_it_was_playable(tmp_path):
     assert "kuponhanede oynanabilir" not in detail
 
 
+def test_a_goal_line_is_shown_once_even_though_it_lives_in_two_fields(tmp_path):
+    db_path = str(tmp_path / "web.db")
+    coupon_id = _seed(db_path)
+    with Database(db_path) as db:
+        db.conn.execute(
+            "UPDATE coupon_legs SET market_name='Ev Sahibi Alt/Üst 1.5', "
+            "market_sov='1.5' WHERE coupon_id=?",
+            (coupon_id,),
+        )
+        db.conn.commit()
+    detail = _logged_in(db_path).get(f"/coupons/{coupon_id}").data.decode()
+    assert "Ev Sahibi Alt/Üst 1.5" in detail
+    assert "Ev Sahibi Alt/Üst 1.5 · 1.5" not in detail
+
+
+def test_a_goal_line_missing_from_the_market_name_is_still_shown(tmp_path):
+    db_path = str(tmp_path / "web.db")
+    coupon_id = _seed(db_path)
+    with Database(db_path) as db:
+        db.conn.execute(
+            "UPDATE coupon_legs SET market_name='Ev Sahibi Alt/Üst', "
+            "market_sov='1.5' WHERE coupon_id=?",
+            (coupon_id,),
+        )
+        db.conn.commit()
+    detail = _logged_in(db_path).get(f"/coupons/{coupon_id}").data.decode()
+    assert "Ev Sahibi Alt/Üst · 1.5" in detail
+
+
 def test_surprise_details_are_also_private(tmp_path):
     db_path = str(tmp_path / "web.db")
     report_id = _seed_surprise(db_path)
