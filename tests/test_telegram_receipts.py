@@ -43,22 +43,19 @@ def _coupons(event_id: int = 1):
     return built
 
 
+COMPETITIONS = {1: {"name": "Test Lig", "country_code": "TR"}}
+
+
 def _stub_build(monkeypatch, coupons, for_date="2026-08-09"):
-    """Hand push_daily a prepared coupon set and record what it persists."""
+    """Hand push_daily a prepared coupon set instead of the live bulletin."""
     from .test_engine import NOW, _events
 
-    persisted = []
+    monkeypatch.setattr(service, "capture_shadow_predictions", lambda *a, **k: None)
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _path: (coupons, _events(), {}, NOW, for_date),
+        lambda _path: (coupons, _events(), COMPETITIONS, NOW, for_date),
     )
-    monkeypatch.setattr(
-        service,
-        "_persist_daily",
-        lambda *args, **kwargs: persisted.append(kwargs.get("rebuild")),
-    )
-    return persisted
 
 
 def test_daily_push_has_exact_local_time_gate_and_persists_receipt(
@@ -66,16 +63,15 @@ def test_daily_push_has_exact_local_time_gate_and_persists_receipt(
 ):
     path = str(tmp_path / "daily.db")
     _chat(path)
-    persisted = _stub_build(monkeypatch, _coupons())
+    _stub_build(monkeypatch, _coupons())
     telegram = Telegram()
 
     before = datetime(2026, 8, 9, 9, 59, 59, tzinfo=config.TIMEZONE)
     assert service.push_daily(path, telegram, now=before) is None
-    assert persisted == []
+    assert telegram.sent == []
 
     due = datetime(2026, 8, 9, 10, 0, 0, tzinfo=config.TIMEZONE)
     assert service.push_daily(path, telegram, now=due) == "123"
-    assert persisted == [False]
     with Database(path) as db:
         receipt = db.get_telegram_delivery_receipt("daily_push:2026-08-09")
         assert receipt == {
@@ -94,6 +90,15 @@ def test_daily_push_has_exact_local_time_gate_and_persists_receipt(
     assert len(telegram.sent) == 1
 
 
+def _rebuild_stored_coupon(path, coupons, for_date="2026-08-09"):
+    """Replace the day's coupon of record, as a rebuild does."""
+    with Database(path) as db:
+        db.supersede_daily_coupons(for_date, now=1)
+        for coupon in coupons.values():
+            if coupon:
+                db.save_coupon(coupon, for_date)
+
+
 def test_a_rebuilt_coupon_reaches_the_reader_who_is_holding_the_old_one(
     tmp_path, monkeypatch
 ):
@@ -107,31 +112,39 @@ def test_a_rebuilt_coupon_reaches_the_reader_who_is_holding_the_old_one(
     _stub_build(monkeypatch, _coupons(event_id=1))
     assert service.push_daily(path, telegram, now=due) == "123"
 
+    _rebuild_stored_coupon(path, _coupons(event_id=2))
     later = datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE)
-    persisted = _stub_build(monkeypatch, _coupons(event_id=99))
     assert service.push_daily(path, telegram, now=later) == "123"
 
     assert len(telegram.sent) == 2
-    assert "KUPON GÜNCELLENDİ" in telegram.sent[1][1]
-    # The slip it replaces must be retired, not left pending alongside it.
-    assert persisted == [True]
+    revision = telegram.sent[1][1]
+    assert "KUPON GÜNCELLENDİ" in revision
+    # It must describe the coupon now on record, not a fresh build.
+    assert "PRIVATE" not in revision
 
 
-def test_an_unchanged_coupon_is_not_sent_twice(tmp_path, monkeypatch):
+def test_a_coupon_that_only_reprices_is_not_sent_again(tmp_path, monkeypatch):
+    # The scheduler asks many times an hour and odds never stop moving, so
+    # only a changed instruction is worth interrupting the reader for.
     path = str(tmp_path / "same.db")
     _chat(path)
     telegram = Telegram()
-    coupons = _coupons()
     due = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
 
-    _stub_build(monkeypatch, coupons)
+    _stub_build(monkeypatch, _coupons(event_id=1))
     assert service.push_daily(path, telegram, now=due) == "123"
 
+    # A rebuild at new prices, same selections.
+    repriced = _coupons(event_id=1)
+    for coupon in repriced.values():
+        for leg in coupon.legs:
+            leg.odd = round(leg.odd + 0.05, 2)
+    _rebuild_stored_coupon(path, repriced)
+
     later = datetime(2026, 8, 9, 15, 30, tzinfo=config.TIMEZONE)
-    persisted = _stub_build(monkeypatch, coupons)
+    _stub_build(monkeypatch, _coupons(event_id=77))
     assert service.push_daily(path, telegram, now=later) is None
     assert len(telegram.sent) == 1
-    assert persisted == []
 
 
 def test_a_revision_keeps_its_own_receipt_alongside_the_morning_push(
@@ -144,7 +157,7 @@ def test_a_revision_keeps_its_own_receipt_alongside_the_morning_push(
 
     _stub_build(monkeypatch, _coupons(event_id=1))
     service.push_daily(path, telegram, now=due)
-    _stub_build(monkeypatch, _coupons(event_id=99))
+    _rebuild_stored_coupon(path, _coupons(event_id=2))
     service.push_daily(path, telegram, now=due)
 
     with Database(path) as db:

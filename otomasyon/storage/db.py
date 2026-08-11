@@ -366,6 +366,39 @@ class Database:
         self.conn.commit()
         return coupon_id
 
+    def pending_daily_coupons(self, for_date: str) -> dict[str, list[dict]]:
+        """The day's coupons of record, keyed by kind, newest first.
+
+        This is what the reader was handed, as opposed to what a fresh build
+        would produce a minute later at slightly different prices.
+        """
+        coupons = self.conn.execute(
+            """
+            SELECT id, kind FROM coupons
+            WHERE for_date=? AND status='pending'
+              AND kind IN ('daily_main','daily_alt')
+            ORDER BY id DESC
+            """,
+            (for_date,),
+        ).fetchall()
+        out: dict[str, list[dict]] = {}
+        for coupon in coupons:
+            if coupon["kind"] in out:
+                continue
+            legs = self.conn.execute(
+                """
+                SELECT cl.*, e.home, e.away, e.start_ts, c.name AS competition
+                FROM coupon_legs cl
+                LEFT JOIN events e ON e.id=cl.event_id
+                LEFT JOIN competitions c ON c.id=e.competition_id
+                WHERE cl.coupon_id=?
+                ORDER BY e.start_ts, cl.id
+                """,
+                (coupon["id"],),
+            ).fetchall()
+            out[coupon["kind"]] = [dict(row) for row in legs]
+        return out
+
     def supersede_daily_coupons(self, for_date: str, *, now: int | None = None) -> int:
         """Retire a day's still-pending daily coupons before they are replaced.
 
@@ -390,7 +423,7 @@ class Database:
             """,
             (for_date,),
         ).fetchall()
-        now = now or int(time.time())
+        now = int(time.time()) if now is None else now
         retired = [
             row["id"]
             for row in rows

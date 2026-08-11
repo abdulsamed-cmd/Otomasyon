@@ -168,6 +168,14 @@ until python3 -u -m otomasyon.cli bot; do sleep 2; done
 Kasıtlı durdurma (Ctrl-C) yeniden başlatma sayılmaz; yalnızca beklenmedik
 sonlanmalar yeniden başlatılır.
 
+Kupon günde bir kez, `10:00`te kurulup gönderilir. Sonrasında gönderim kayıttaki
+kuponu izler: bir şey günün kuponunun yerine yenisini koyduysa, elde tutulan
+kupon artık geçersizdir ve bunu söylemek gerekir — o yüzden yeni kupon
+"KUPON GÜNCELLENDİ" başlığıyla tekrar gider. Karar, gönderilen ile kayıttaki
+kuponun **seçimleri** karşılaştırılarak veriliyor; fiyat gün boyu oynadığı hâlde
+talimat değişmediği için yalnız fiyatı değişen kupon sessiz kalır. Aksi hâlde
+zamanlayıcı saatte onlarca kez sorduğundan kupon sürekli yeniden gönderilirdi.
+
 Her gün `09:45`te, `10:00` kuponundan önce ayrı bir model sağlık bildirimi
 gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
 6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.

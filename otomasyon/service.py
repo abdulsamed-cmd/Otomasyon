@@ -72,6 +72,38 @@ def _persist_daily(
     capture_shadow_predictions(db_path, events=events, now=now)
 
 
+def coupons_of_record(db_path: str, for_date: str) -> dict:
+    """Rebuild the day's stored coupons as the objects the formatter expects."""
+    with Database(db_path) as db:
+        stored = db.pending_daily_coupons(for_date)
+    out: dict[str, engine.Coupon | None] = {"main": None, "alt": None}
+    for kind, legs in stored.items():
+        if not legs:
+            continue
+        out["main" if kind == "daily_main" else "alt"] = engine.Coupon(
+            kind=kind,
+            legs=[
+                engine.Leg(
+                    event_id=row["event_id"],
+                    home=row["home"] or "",
+                    away=row["away"] or "",
+                    competition=row["competition"] or "",
+                    start_ts=row["start_ts"] or 0,
+                    market_code=(row["market_t"], row["market_st"]),
+                    market_name=row["market_name"],
+                    sov=row["market_sov"],
+                    outcome_no=row["outcome_no"],
+                    outcome_name=row["outcome_name"],
+                    odd=row["odd_at_creation"],
+                    fair_prob=row["fair_prob"],
+                    mbs=row["mbs"] or 1,
+                )
+                for row in legs
+            ],
+        )
+    return out
+
+
 def daily_picks(coupons) -> str:
     """What the reader is being told to play, ignoring how it is priced.
 
@@ -146,10 +178,11 @@ def push_daily(
 ) -> str | None:
     """Proactively send today's daily coupon to the stored chat.
 
-    De-duplicated on the selections rather than the day. A coupon that is
-    rebuilt after the morning push replaces the one the reader is holding, and
-    saying nothing would leave them with a slip the system has retired.
-    Returns the chat id sent to, or None if skipped.
+    Once a day the coupon is built and sent. After that the push follows the
+    coupon of record rather than rebuilding: if something replaced the day's
+    coupon, the reader is holding a slip that has been retired and is told so.
+    Prices move all day without changing the instruction, so a coupon that
+    merely reprices says nothing. Returns the chat id sent to, or None.
     """
     now = now or datetime.now(tz=config.TIMEZONE)
     scheduled = now.replace(
@@ -168,27 +201,23 @@ def push_daily(
         pushed_date = db.get_setting("last_push_date")
         pushed_picks = db.get_setting("last_push_picks")
 
-    coupons, events, competitions, built_at, for_date = _build_daily(db_path)
-    picks = daily_picks(coupons)
-    already_pushed_today = pushed_date == today
-    if not force and already_pushed_today and pushed_picks == picks:
-        return None
-
-    _persist_daily(
-        db_path,
-        coupons,
-        events,
-        competitions,
-        built_at,
-        for_date,
-        rebuild=already_pushed_today,
-    )
-    text = formatting.format_daily(coupons, for_date)
-    if already_pushed_today:
+    revision = pushed_date == today and not force
+    if revision:
+        coupons = coupons_of_record(db_path, today)
+        picks = daily_picks(coupons)
+        if picks == pushed_picks or not any(coupons.values()):
+            return None
         text = (
             "KUPON GÜNCELLENDİ — bugün gönderilen kupon geçersiz sayıldı, "
-            "yerine aşağıdaki geçti.\n\n" + text
+            "yerine aşağıdaki geçti.\n\n"
+        ) + formatting.format_daily(coupons, today)
+    else:
+        coupons, events, competitions, built_at, for_date = _build_daily(db_path)
+        picks = daily_picks(coupons)
+        _persist_daily(
+            db_path, coupons, events, competitions, built_at, for_date, rebuild=False
         )
+        text = formatting.format_daily(coupons, for_date)
 
     response = client.send_message(chat_id, text)
     delivered_chat_id, message_id, telegram_date = _telegram_delivery(
@@ -200,7 +229,7 @@ def push_daily(
             notification_dates=[today],
             # A revision is a second delivery on the same day, so the receipt
             # is keyed by what was sent as well as when.
-            dedupe_suffix=None if not already_pushed_today else picks,
+            dedupe_suffix=picks if revision else None,
             chat_id=delivered_chat_id,
             message_id=message_id,
             telegram_date=telegram_date,
