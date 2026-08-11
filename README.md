@@ -12,7 +12,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 
 - [x] Veri kaynağı keşfi — iddaa genel JSON API (`sportsbookv2.iddaa.com`)
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
-- [x] Güvenli kupon motoru (ana + alternatif, 2.00–3.00)
+- [x] Güvenli kupon motoru (ana + alternatif, hedef oran bandı, serbest bacak sayısı)
 - [x] Sürpriz modülü (6+ Gol, sistem senaryoları)
 - [x] Sürpriz aday/sonuç persistence + 2'li sistem teorik ROI kapısı
 - [x] Telegram botu (`bugün` / `sürpriz` / `kadro` / `durum`, tek kullanıcı) + proaktif gönderim
@@ -55,6 +55,8 @@ python3 -m otomasyon.cli fotmob-lineup-backfill --per-team 1
 python3 -m otomasyon.cli lineup-risk --high-rotation 5
 python3 -m otomasyon.cli xg-backfill --season 2024 --season 2025
 python3 -m otomasyon.cli xg-auto --force
+python3 -m otomasyon.cli coupon --rebuild     # maçlar başlamadıysa günün kuponunu yenile
+python3 -m otomasyon.cli calibration          # piyasa/model ağırlıklarını yeniden ölç
 python3 -m otomasyon.cli model-refresh --force
 python3 -m otomasyon.cli shadow-predict
 python3 -m otomasyon.cli shadow-metrics
@@ -223,10 +225,47 @@ Geliştirme dönemi baz replay'inde ana kupon ROI'si `-%23,4`, alternatif ROI'si
 eşikleri de pozitif sonuç üretmedi. Bu aday canlıya alınmadı ve daha sonraki test
 dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmadı.
 
+### Kupon nasıl kuruluyor
+
+Motor bir hedef fiyatı (`1.85–2.15`) alır ve o fiyatı **en yüksek tutma
+olasılığıyla** veren kurguyu arar. Bacak sayısı bir ayar değil, bu aramanın
+sonucudur: her ek bacak kupona bir pazar marjı daha ekler, bu yüzden aynı
+getiride kısa kupon her zaman daha sık tutar. Arama bu nedenle bandı
+yakalayabilen en küçük bacak sayısında durur.
+
+Ölçüm bunu doğruluyor. Arşivdeki 75 bin maçta `1.85–2.15` fiyatlı tek bir
+seçim `%41,6` tutarken, aynı 2.00'ı veren iki `~1.41` bacak `%32,7` tutuyor.
+Eylül 2025 – Ağustos 2026 replay'inde motorun eski hâli ana kuponda `%40,6`
+isabet ve günlerin `%55,7`'sinde "en az biri tuttu" verirken, yeni hâli
+`%46,0` ve `%64,7` veriyor.
+
+Havuz yalnız ucuz ve sonuçlandırabildiğimiz pazarlardan beslenir: canlı
+bültende Maç Sonucu, Alt/Üst, Karşılıklı Gol ve Çifte Şans `%18` marjla
+fiyatlanırken kombinasyon pazarları (skor+gol, handikap, İY/MS, gol bandı)
+aynı para için `%21–24` istiyor; bunlar dışarıda kalır. Çifte Şans'ın üç
+seçimi ikişer sonucu kapsadığından adil olasılıkları 1'e değil 2'ye toplanır —
+bunu 1'e normalize etmek bültenin en güvenli pazarını yarı olasılıkla
+gösterip her eşiğin arkasına saklıyordu.
+
+### Kalibrasyon katmanı
+
+`calibration` komutu piyasa fiyatını ve kendi modelimizi log-odds ekseninde
+rakip iki görüş olarak birleştirir ve her birinin ağırlığını **ölçer**. Ölçüm
+kendi holdout'unda yapılır: katsayıları uyduran veri, onları puanlayan veriden
+önce biter.
+
+Bugünkü sonuç açık: piyasa ağırlığı `1,14` / `1,11`, model ağırlığı `-0,06` /
+`-0,00`, modelin log kaybına katkısı `+0,00004` düzeyinde. Yani model, fiyatın
+içinde olmayan bir bilgi taşımıyor ve kupon seçimine girmiyor. Aynı ölçüm
+modelin aynı fiyattaki adayları sıralayamadığını da gösteriyor (kova içi
+AUC `0,483`, yani rastgeleden iyi değil). Katman kalıcı olarak bağlıdır: model
+holdout'ta ölçülebilir katkı üretmeye başladığı gün ağırlığı kendiliğinden
+alır, kod değişmesi gerekmez.
+
 Günlük kupon ve sürpriz laboratuvarı ayrı modüllerdir. Sürpriz aday/sistem
 kuralları günlük kupon motorunun pazar havuzunu veya seçimini değiştirmez.
-Her iki süreç de hazırlık, genç ve rezerv liglerinin yanında takım adındaki
-`II`, `B`, `2`, `Academy` ve `Uxx` rezerv işaretlerini dışlar.
+Her iki süreç de hazırlık, genç, amatör/bölgesel ve rezerv liglerin yanında
+takım adındaki `II`, `B`, `2`, `Academy` ve `Uxx` rezerv işaretlerini dışlar.
 6+ Gol adayları ve sistem senaryoları günlük kuponlardan bağımsız ölçülür.
 Başka Alt/Üst çizgileri veya İY/MS seçimleri bu laboratuvara dahil edilmez.
 
