@@ -49,7 +49,20 @@ MARKET_BTTS = (2, 89)             # Karşılıklı Gol (Var/Yok)
 MARKET_TOTAL_GOALS_BAND = (2, 4)  # Toplam Gol (0-1 / 2-3 / 4-5 / 6+)
 MARKET_HTFT = (2, 90)             # İlk Yarı / Maç Sonucu
 MARKET_ODD_EVEN = (2, 91)         # Tek / Çift
+
+# The same questions asked of a half rather than of the whole match, and of one
+# team rather than of both. A half-time score settles all of them, and iddaa
+# prices them at the same ~18% margin as the full-match markets above.
+MARKET_HT_RESULT = (2, 88)         # 1. Yarı Sonucu (1 / 0 / 2)
 MARKET_HT_DOUBLE_CHANCE = (2, 77)  # 1. Yarı Çifte Şans
+MARKET_HT_OVER_UNDER = (2, 60)     # 1. Yarı Alt/Üst {line}
+MARKET_HT_BTTS = (2, 720)          # 1. Yarı Karşılıklı Gol (Var/Yok)
+MARKET_SECOND_HALF_RESULT = (2, 36)  # 2. Yarı Sonucu (1 / 0 / 2)
+MARKET_HIGHER_SCORING_HALF = (2, 6)  # Hangi Yarıda Daha Fazla Gol Olur
+MARKET_HOME_OVER_UNDER = (2, 603)     # Ev Sahibi Alt/Üst {line}
+MARKET_AWAY_OVER_UNDER = (2, 604)     # Deplasman Alt/Üst {line}
+MARKET_HOME_HT_OVER_UNDER = (2, 722)  # Ev Sahibi 1. Yarı Altı/Üstü {line}
+MARKET_AWAY_HT_OVER_UNDER = (2, 723)  # Deplasman 1. Yarı Altı/Üstü {line}
 
 # Each double chance selection wins on two of the three results, so its three
 # fair probabilities sum to 2 rather than 1. Normalising them to 1 halves every
@@ -66,11 +79,30 @@ MARKET_OUTCOME_COVERAGE = {
 # the same money and are excluded: every extra point of margin comes straight
 # out of the hit rate. Only markets ``settlement.settle_leg`` can decide are
 # listed, so a coupon can never contain a leg we cannot grade.
+#
+# Asking the same match about its halves and about each team separately is what
+# widens the board: a coupon takes at most one leg per match, so the extra
+# families are not extra legs, they are better-priced answers to the one leg
+# that match is allowed to contribute.
+#
+# Tek/Çift is settleable and priced at the same margin, but it is deliberately
+# absent: goal parity landed 50.0% against a 50.0% price over 1,638 archived
+# legs, which is a coin no amount of team knowledge can call.
 DAILY_COUPON_MARKETS = (
     MARKET_DOUBLE_CHANCE,
     MARKET_OVER_UNDER,
     MARKET_BTTS,
     MARKET_MATCH_RESULT,
+    MARKET_HT_RESULT,
+    MARKET_HT_DOUBLE_CHANCE,
+    MARKET_HT_OVER_UNDER,
+    MARKET_HT_BTTS,
+    MARKET_SECOND_HALF_RESULT,
+    MARKET_HIGHER_SCORING_HALF,
+    MARKET_HOME_OVER_UNDER,
+    MARKET_AWAY_OVER_UNDER,
+    MARKET_HOME_HT_OVER_UNDER,
+    MARKET_AWAY_HT_OVER_UNDER,
 )
 # Hard ceiling on the margin of any market a leg may come from, so a market
 # that is repriced upwards drops out on its own.

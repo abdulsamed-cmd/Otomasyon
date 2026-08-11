@@ -48,8 +48,74 @@ def _code(home: int, away: int) -> str:
     return "2"
 
 
+def _half_time(result: MatchResult) -> tuple[int, int] | None:
+    """Half-time score, or ``None`` when it cannot be trusted.
+
+    A half-time score that is missing, negative, or ahead of the full-time
+    score never happened, and half-of-match markets are left ungraded rather
+    than decided off a scoreline the match did not have.
+    """
+    home, away = result.ht_home, result.ht_away
+    if home is None or away is None:
+        return None
+    if home < 0 or away < 0:
+        return None
+    if home > result.ft_home or away > result.ft_away:
+        return None
+    return home, away
+
+
+def _decide(won: bool) -> str:
+    return WIN if won else LOSE
+
+
+def _one_x_two(home: int, away: int, outcome_name: str) -> str:
+    if outcome_name not in ("1", "0", "2"):
+        return VOID
+    return _decide(outcome_name == _code(home, away))
+
+
+def _double_chance(home: int, away: int, outcome_name: str) -> str:
+    allowed = {
+        "1 ve 0": {"1", "0"},
+        "1 ve 2": {"1", "2"},
+        "0 ve 2": {"0", "2"},
+    }.get(outcome_name)
+    if allowed is None:
+        return VOID
+    return _decide(_code(home, away) in allowed)
+
+
+def _over_under(total: int, sov: str | None, outcome_name: str) -> str:
+    try:
+        line = float(sov)
+    except (TypeError, ValueError):
+        return VOID
+    if total == line:
+        return VOID  # push (only possible on integer lines)
+    if outcome_name == "Üst":
+        return _decide(total > line)
+    if outcome_name == "Alt":
+        return _decide(total < line)
+    return VOID
+
+
+def _both_scored(home: int, away: int, outcome_name: str) -> str:
+    both = home > 0 and away > 0
+    if outcome_name == "Var":
+        return _decide(both)
+    if outcome_name == "Yok":
+        return _decide(not both)
+    return VOID
+
+
 def settle_leg(t: int, st: int, sov: str | None, outcome_name: str, result: MatchResult) -> str:
-    """Return WIN / LOSE / VOID for one leg given a match result."""
+    """Return WIN / LOSE / VOID for one leg given a match result.
+
+    An outcome name this module does not recognise is VOID rather than LOSE:
+    if iddaa relabels a selection we would rather grade nothing than record a
+    loss the coupon never took.
+    """
     if not result.is_final:
         return VOID
 
@@ -57,51 +123,87 @@ def settle_leg(t: int, st: int, sov: str | None, outcome_name: str, result: Matc
     ft = _code(result.ft_home, result.ft_away)
     total = result.ft_home + result.ft_away
 
+    # --- Full match ---------------------------------------------------------
     if code == config.MARKET_MATCH_RESULT:
-        return WIN if outcome_name == ft else LOSE
+        return _one_x_two(result.ft_home, result.ft_away, outcome_name)
 
     if code == config.MARKET_DOUBLE_CHANCE:
-        allowed = {
-            "1 ve 0": {"1", "0"},
-            "1 ve 2": {"1", "2"},
-            "0 ve 2": {"0", "2"},
-        }.get(outcome_name)
-        return WIN if allowed and ft in allowed else LOSE
+        return _double_chance(result.ft_home, result.ft_away, outcome_name)
 
     if code == config.MARKET_OVER_UNDER:
-        try:
-            line = float(sov)
-        except (TypeError, ValueError):
-            return VOID
-        if total == line:
-            return VOID  # push (only possible on integer lines)
-        if outcome_name == "Üst":
-            return WIN if total > line else LOSE
-        if outcome_name == "Alt":
-            return WIN if total < line else LOSE
-        return VOID
+        return _over_under(total, sov, outcome_name)
 
     if code == config.MARKET_BTTS:
-        both = result.ft_home > 0 and result.ft_away > 0
-        if outcome_name == "Var":
-            return WIN if both else LOSE
-        if outcome_name == "Yok":
-            return WIN if not both else LOSE
+        return _both_scored(result.ft_home, result.ft_away, outcome_name)
+
+    if code == config.MARKET_ODD_EVEN:
+        if outcome_name == "Tek":
+            return _decide(total % 2 == 1)
+        if outcome_name == "Çift":
+            return _decide(total % 2 == 0)  # a goalless match is even
         return VOID
 
     if code == config.MARKET_TOTAL_GOALS_BAND:
         if outcome_name == "6+ gol":
-            return WIN if total >= 6 else LOSE
-        bands = {"0-1 gol": (0, 1), "2-3 gol": (2, 3), "4-5 gol": (4, 5)}
-        band = bands.get(outcome_name)
-        return WIN if band and band[0] <= total <= band[1] else LOSE
+            return _decide(total >= 6)
+        band = {"0-1 gol": (0, 1), "2-3 gol": (2, 3), "4-5 gol": (4, 5)}.get(outcome_name)
+        if band is None:
+            return VOID
+        return _decide(band[0] <= total <= band[1])
+
+    # --- One team's goals ---------------------------------------------------
+    if code == config.MARKET_HOME_OVER_UNDER:
+        return _over_under(result.ft_home, sov, outcome_name)
+
+    if code == config.MARKET_AWAY_OVER_UNDER:
+        return _over_under(result.ft_away, sov, outcome_name)
+
+    # --- Halves -------------------------------------------------------------
+    half = _half_time(result)
+    if half is None:
+        return VOID  # every market below needs a half-time score
+    ht_home, ht_away = half
+
+    if code == config.MARKET_HT_RESULT:
+        return _one_x_two(ht_home, ht_away, outcome_name)
+
+    if code == config.MARKET_HT_DOUBLE_CHANCE:
+        return _double_chance(ht_home, ht_away, outcome_name)
+
+    if code == config.MARKET_HT_OVER_UNDER:
+        return _over_under(ht_home + ht_away, sov, outcome_name)
+
+    if code == config.MARKET_HT_BTTS:
+        return _both_scored(ht_home, ht_away, outcome_name)
+
+    if code == config.MARKET_HOME_HT_OVER_UNDER:
+        return _over_under(ht_home, sov, outcome_name)
+
+    if code == config.MARKET_AWAY_HT_OVER_UNDER:
+        return _over_under(ht_away, sov, outcome_name)
+
+    if code == config.MARKET_SECOND_HALF_RESULT:
+        return _one_x_two(
+            result.ft_home - ht_home, result.ft_away - ht_away, outcome_name
+        )
+
+    if code == config.MARKET_HIGHER_SCORING_HALF:
+        first = ht_home + ht_away
+        second = total - first
+        scored_more = {
+            "1.": first > second,
+            "Eşit": first == second,
+            "2.": second > first,
+        }.get(outcome_name)
+        if scored_more is None:
+            return VOID
+        return _decide(scored_more)
 
     if code == config.MARKET_HTFT:
-        if result.ht_home is None or result.ht_away is None:
-            return VOID
-        ht = _code(result.ht_home, result.ht_away)
         want = outcome_name.split("/")
-        return WIN if len(want) == 2 and want[0] == ht and want[1] == ft else LOSE
+        if len(want) != 2 or want[0] not in ("1", "0", "2") or want[1] not in ("1", "0", "2"):
+            return VOID
+        return _decide(want[0] == _code(ht_home, ht_away) and want[1] == ft)
 
     return VOID  # unknown / unsupported market
 
