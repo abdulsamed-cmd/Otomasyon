@@ -197,6 +197,11 @@ TELEGRAM_WATCHDOG_STALE_SECONDS = 5 * 60
 # even if they never type "bugün". Chosen to be well before typical kickoffs.
 DAILY_PUSH_HOUR = 10
 
+# Once the day's coupon has kicked off, the matches that are left can carry a
+# follow-up. Looking for one costs a bulletin fetch, and on days when nothing
+# eligible is left there is nothing to find, so the search is spaced out.
+DAILY_FOLLOW_UP_RETRY_SECONDS = 15 * 60
+
 # Poll Mackolik for completed matches while the bot is running. The persisted
 # last-poll timestamp prevents duplicate work across bot restarts.
 RESULT_POLL_INTERVAL_SECONDS = 15 * 60

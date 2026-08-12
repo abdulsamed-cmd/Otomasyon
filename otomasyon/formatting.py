@@ -37,20 +37,33 @@ def format_coupon(title: str, coupon, results=None) -> str:
     return "\n".join(lines)
 
 
-def format_daily(coupons: dict, for_date: str, results: dict | None = None) -> str:
-    if not coupons.get("main") and not coupons.get("alt"):
+_DAILY_TITLES = {"main": "ANA KUPON", "alt": "ALTERNATİF"}
+
+
+def format_daily(record: dict, for_date: str) -> str:
+    if not record.get("main") and not record.get("alt"):
         return (
             f"Günün kuponu ({for_date}) henüz hazır değil.\n"
             f"En az {config.DAILY_MAIN_MIN_ODDS:.2f} ödeyen uygun kurgu "
             "bulunamadı."
         )
-    results = results or {}
     parts = [f"GÜNÜN DÜŞÜK RİSKLİ KUPONLARI ({for_date})", ""]
-    parts.append(format_coupon("ANA KUPON", coupons.get("main"), results.get("main")))
-    parts.append("")
-    parts.append(format_coupon("ALTERNATİF", coupons.get("alt"), results.get("alt")))
-    parts.append("")
-    main = coupons.get("main")
+    for kind, title in _DAILY_TITLES.items():
+        entries = record.get(kind) or []
+        if not entries:
+            parts.append(format_coupon(title, None))
+            parts.append("")
+            continue
+        for index, entry in enumerate(entries, start=1):
+            # A day with more than one coupon of a kind handed them over in
+            # this order, so they are numbered rather than presented as rivals.
+            numbered = title if len(entries) == 1 else f"{title} {index}"
+            parts.append(
+                format_coupon(numbered, entry["coupon"], entry.get("results"))
+            )
+            parts.append("")
+    main_entries = record.get("main") or []
+    main = main_entries[-1]["coupon"] if main_entries else None
     if main and main.combined_prob < 0.5:
         # Read off the coupon rather than asserted: at a payout this high the
         # market margin leaves no selection above 50%, so the pick is the less

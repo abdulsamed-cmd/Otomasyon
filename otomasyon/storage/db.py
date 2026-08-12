@@ -326,19 +326,34 @@ class Database:
         now = now or int(time.time())
         cur = self.conn.cursor()
         if coupon.kind in ("daily_main", "daily_alt"):
-            # A superseded coupon is no longer the day's coupon, so it must not
-            # answer for one; otherwise the replacement is silently discarded.
+            # Only a coupon that can still be played answers for the day. A
+            # superseded one has been retired, and one whose first match has
+            # kicked off has been handed over: a build from the matches that
+            # are left is the next coupon, not another go at that one.
             existing = cur.execute(
                 """
-                SELECT id FROM coupons
-                WHERE kind=? AND for_date=?
-                  AND (notes IS NULL OR notes <> 'superseded')
-                ORDER BY id LIMIT 1
+                SELECT c.id, MIN(e.start_ts) AS first_start
+                FROM coupons c
+                JOIN coupon_legs cl ON cl.coupon_id=c.id
+                LEFT JOIN events e ON e.id=cl.event_id
+                WHERE c.kind=? AND c.for_date=? AND c.status<>'superseded'
+                GROUP BY c.id
+                ORDER BY c.id DESC LIMIT 1
                 """,
                 (coupon.kind, for_date),
             ).fetchone()
             if existing is not None:
-                return existing["id"]
+                if (
+                    existing["first_start"] is None
+                    or existing["first_start"] > now
+                ):
+                    return existing["id"]
+                # The day already has a coupon that has been played, so this
+                # one is a follow-up and has to be playable in its own right.
+                # A build handed back from matches that have started is not.
+                starts = [leg.start_ts for leg in coupon.legs if leg.start_ts]
+                if not starts or min(starts) <= now:
+                    return existing["id"]
         cur.execute(
             """
             INSERT INTO coupons
@@ -366,29 +381,29 @@ class Database:
         self.conn.commit()
         return coupon_id
 
-    def daily_coupons_of_record(self, for_date: str) -> dict[str, list[dict]]:
-        """The day's coupons of record, keyed by kind, newest first.
+    def daily_coupons_of_record(self, for_date: str) -> list[dict]:
+        """The day's coupons, oldest first, as they were handed over.
 
-        This is what the reader was handed, as opposed to what a fresh build
-        would produce a minute later at slightly different prices.
+        A day is not one coupon per kind. Once a coupon's first match kicks
+        off it can no longer be played, so a build from the matches that are
+        left is a follow-up rather than a correction, and both remain the
+        reader's.
 
-        Being superseded is the only way to stop being the coupon of record.
-        A coupon that has been settled is still the one the reader is holding -
-        winning is not a way of ceasing to have been today's coupon.
+        Being superseded is the only way to leave the record. A coupon that
+        has been settled is still one the reader was holding - winning is not
+        a way of ceasing to have been today's coupon.
         """
         coupons = self.conn.execute(
             """
-            SELECT id, kind FROM coupons
+            SELECT id, kind, status FROM coupons
             WHERE for_date=? AND status<>'superseded'
               AND kind IN ('daily_main','daily_alt')
-            ORDER BY id DESC
+            ORDER BY id
             """,
             (for_date,),
         ).fetchall()
-        out: dict[str, list[dict]] = {}
+        out: list[dict] = []
         for coupon in coupons:
-            if coupon["kind"] in out:
-                continue
             legs = self.conn.execute(
                 """
                 SELECT cl.*, e.home, e.away, e.start_ts, c.name AS competition
@@ -400,8 +415,47 @@ class Database:
                 """,
                 (coupon["id"],),
             ).fetchall()
-            out[coupon["kind"]] = [dict(row) for row in legs]
+            out.append(
+                {
+                    "id": coupon["id"],
+                    "kind": coupon["kind"],
+                    "status": coupon["status"],
+                    "legs": [dict(row) for row in legs],
+                }
+            )
         return out
+
+    def daily_coupon_kinds_played(self, for_date: str, *, now: int | None = None):
+        """Kinds whose latest coupon has kicked off and can be followed up.
+
+        Answered from stored rows so the caller can decide whether a build is
+        worth doing at all: fetching the bulletin on every cycle to find out
+        there is nothing to do is the expensive way to ask.
+        """
+        now = int(time.time()) if now is None else now
+        rows = self.conn.execute(
+            """
+            SELECT c.kind, MAX(c.id) AS id
+            FROM coupons c
+            WHERE c.for_date=? AND c.status<>'superseded'
+              AND c.kind IN ('daily_main','daily_alt')
+            GROUP BY c.kind
+            """,
+            (for_date,),
+        ).fetchall()
+        played = []
+        for row in rows:
+            start = self.conn.execute(
+                """
+                SELECT MIN(e.start_ts) AS first_start
+                FROM coupon_legs cl LEFT JOIN events e ON e.id=cl.event_id
+                WHERE cl.coupon_id=?
+                """,
+                (row["id"],),
+            ).fetchone()["first_start"]
+            if start is not None and start <= now:
+                played.append(row["kind"])
+        return played
 
     def supersede_daily_coupons(self, for_date: str, *, now: int | None = None) -> int:
         """Retire a day's still-pending daily coupons before they are replaced.

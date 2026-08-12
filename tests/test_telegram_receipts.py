@@ -99,6 +99,212 @@ def _rebuild_stored_coupon(path, coupons, for_date="2026-08-09"):
                 db.save_coupon(coupon, for_date)
 
 
+def _event_at(event_id: int, start_ts: int):
+    from otomasyon.iddaa.normalize import NormalizedEvent
+
+    return NormalizedEvent(
+        event_id=event_id, home=f"Ev{event_id}", away=f"Dep{event_id}",
+        competition_id=1, competition_name="Test Lig", country_code="TR",
+        sport_id=1, start_ts=start_ts, status=0, markets=[],
+    )
+
+
+def _pair_at(event_id: int, start_ts: int):
+    """A main and an alternative on one match kicking off at a given time."""
+    from otomasyon.engine import Coupon, Leg
+
+    def leg(odd):
+        return Leg(
+            event_id=event_id, home=f"Ev{event_id}", away=f"Dep{event_id}",
+            competition="Test Lig", start_ts=start_ts,
+            market_code=config.MARKET_OVER_UNDER, market_name="Alt/Üst",
+            sov="2.5", outcome_no=1, outcome_name="Alt", odd=odd, fair_prob=0.6,
+        )
+
+    return {
+        "main": Coupon(kind="daily_main", legs=[leg(1.50)]),
+        "alt": Coupon(kind="daily_alt", legs=[leg(2.00)]),
+    }
+
+
+def _stub_pair(monkeypatch, *, event_id, start_ts, for_date, built_at, builds=None):
+    coupons = _pair_at(event_id, start_ts)
+
+    def build(_path):
+        if builds is not None:
+            builds.append(event_id)
+        return coupons, [_event_at(event_id, start_ts)], COMPETITIONS, built_at, for_date
+
+    monkeypatch.setattr(service, "capture_shadow_predictions", lambda *a, **k: None)
+    monkeypatch.setattr(service, "_build_daily", build)
+
+
+def test_a_played_coupon_is_followed_by_one_built_from_what_is_left(
+    tmp_path, monkeypatch
+):
+    # The day is not over when its coupon is. Matches still to come can carry
+    # another, and the slip already played keeps standing rather than being
+    # rewritten: it may well have won.
+    path = str(tmp_path / "followup.db")
+    _chat(path)
+    telegram = Telegram()
+    day = "2026-08-09"
+    morning = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+    afternoon = datetime(2026, 8, 9, 15, 0, tzinfo=config.TIMEZONE)
+    lunchtime_kickoff = int(datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE).timestamp())
+    evening_kickoff = int(datetime(2026, 8, 9, 22, 0, tzinfo=config.TIMEZONE).timestamp())
+
+    _stub_pair(
+        monkeypatch, event_id=1, start_ts=lunchtime_kickoff, for_date=day,
+        built_at=morning,
+    )
+    assert service.push_daily(path, telegram, now=morning) == "123"
+
+    _stub_pair(
+        monkeypatch, event_id=2, start_ts=evening_kickoff, for_date=day,
+        built_at=afternoon,
+    )
+    assert service.push_daily(path, telegram, now=afternoon) == "123"
+
+    follow_up = telegram.sent[1][1]
+    assert "YENİ KUPON" in follow_up
+    assert "KUPON GÜNCELLENDİ" not in follow_up
+    assert "Ev1 - Dep1" in follow_up and "Ev2 - Dep2" in follow_up
+
+    record = service.coupons_of_record(path, day)
+    assert len(record["main"]) == 2 and len(record["alt"]) == 2
+    with Database(path) as db:
+        statuses = [
+            row["status"]
+            for row in db.conn.execute(
+                "SELECT status FROM coupons WHERE for_date=? ORDER BY id", (day,)
+            )
+        ]
+    assert statuses == ["pending"] * 4
+
+
+def test_a_coupon_still_to_be_played_is_not_followed_up(tmp_path, monkeypatch):
+    # Two live coupons of the same kind would be two bets where one was
+    # promised, so nothing is added until the first has kicked off.
+    path = str(tmp_path / "live.db")
+    _chat(path)
+    telegram = Telegram()
+    day = "2026-08-09"
+    morning = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+    afternoon = datetime(2026, 8, 9, 15, 0, tzinfo=config.TIMEZONE)
+    evening_kickoff = int(datetime(2026, 8, 9, 22, 0, tzinfo=config.TIMEZONE).timestamp())
+
+    _stub_pair(
+        monkeypatch, event_id=1, start_ts=evening_kickoff, for_date=day,
+        built_at=morning,
+    )
+    assert service.push_daily(path, telegram, now=morning) == "123"
+
+    builds: list[int] = []
+    _stub_pair(
+        monkeypatch, event_id=2, start_ts=evening_kickoff, for_date=day,
+        built_at=afternoon, builds=builds,
+    )
+    assert service.push_daily(path, telegram, now=afternoon) is None
+    assert builds == []
+    assert len(service.coupons_of_record(path, day)["main"]) == 1
+
+
+def test_a_follow_up_does_not_reach_into_tomorrow(tmp_path, monkeypatch):
+    # A build run late enough widens its window to the next 24 hours to find
+    # anything at all. Filed under today, tomorrow's match could then be bet
+    # on again by tomorrow's own coupon.
+    path = str(tmp_path / "tomorrow.db")
+    _chat(path)
+    telegram = Telegram()
+    day = "2026-08-09"
+    morning = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+    midnight = datetime(2026, 8, 9, 23, 45, tzinfo=config.TIMEZONE)
+    lunchtime_kickoff = int(datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE).timestamp())
+    tomorrow_kickoff = int(datetime(2026, 8, 10, 16, 0, tzinfo=config.TIMEZONE).timestamp())
+
+    _stub_pair(
+        monkeypatch, event_id=1, start_ts=lunchtime_kickoff, for_date=day,
+        built_at=morning,
+    )
+    assert service.push_daily(path, telegram, now=morning) == "123"
+
+    _stub_pair(
+        monkeypatch, event_id=2, start_ts=tomorrow_kickoff, for_date=day,
+        built_at=midnight,
+    )
+    assert service.push_daily(path, telegram, now=midnight) is None
+    assert len(service.coupons_of_record(path, day)["main"]) == 1
+
+
+def test_a_kind_with_nothing_to_offer_gains_rather_than_replaces(
+    tmp_path, monkeypatch
+):
+    # A morning that could build no alternative has not lost one when the
+    # evening finds it, so the reader must not be told a coupon was retired.
+    path = str(tmp_path / "gained.db")
+    _chat(path)
+    telegram = Telegram()
+    day = "2026-08-09"
+    morning = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+    afternoon = datetime(2026, 8, 9, 15, 0, tzinfo=config.TIMEZONE)
+    lunchtime_kickoff = int(datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE).timestamp())
+    evening_kickoff = int(datetime(2026, 8, 9, 22, 0, tzinfo=config.TIMEZONE).timestamp())
+
+    only_main = _pair_at(1, lunchtime_kickoff) | {"alt": None}
+    monkeypatch.setattr(service, "capture_shadow_predictions", lambda *a, **k: None)
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda _p: (only_main, [_event_at(1, lunchtime_kickoff)], COMPETITIONS, morning, day),
+    )
+    assert service.push_daily(path, telegram, now=morning) == "123"
+    assert service.coupons_of_record(path, day)["alt"] == []
+
+    _stub_pair(
+        monkeypatch, event_id=2, start_ts=evening_kickoff, for_date=day,
+        built_at=afternoon,
+    )
+    assert service.push_daily(path, telegram, now=afternoon) == "123"
+    assert "YENİ KUPON" in telegram.sent[1][1]
+    assert "KUPON GÜNCELLENDİ" not in telegram.sent[1][1]
+
+
+def test_the_search_for_a_follow_up_is_not_repeated_every_cycle(
+    tmp_path, monkeypatch
+):
+    # On a day with nothing eligible left, asking on every cycle would fetch
+    # the bulletin all evening to keep learning the same thing.
+    path = str(tmp_path / "throttle.db")
+    _chat(path)
+    telegram = Telegram()
+    day = "2026-08-09"
+    morning = datetime(2026, 8, 9, 10, 0, tzinfo=config.TIMEZONE)
+    lunchtime_kickoff = int(datetime(2026, 8, 9, 13, 0, tzinfo=config.TIMEZONE).timestamp())
+
+    _stub_pair(
+        monkeypatch, event_id=1, start_ts=lunchtime_kickoff, for_date=day,
+        built_at=morning,
+    )
+    assert service.push_daily(path, telegram, now=morning) == "123"
+
+    builds: list[int] = []
+    # The same build comes back, so nothing can be added: only the looking
+    # itself is under test here.
+    _stub_pair(
+        monkeypatch, event_id=1, start_ts=lunchtime_kickoff, for_date=day,
+        built_at=morning, builds=builds,
+    )
+    for minute in (0, 5, 10):
+        moment = datetime(2026, 8, 9, 15, minute, tzinfo=config.TIMEZONE)
+        assert service.push_daily(path, telegram, now=moment) is None
+    assert len(builds) == 1
+
+    later = datetime(2026, 8, 9, 15, 20, tzinfo=config.TIMEZONE)
+    assert service.push_daily(path, telegram, now=later) is None
+    assert len(builds) == 2
+
+
 def test_a_rebuilt_coupon_reaches_the_reader_who_is_holding_the_old_one(
     tmp_path, monkeypatch
 ):

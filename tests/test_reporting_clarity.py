@@ -295,18 +295,18 @@ def test_a_leg_is_labelled_as_the_markets_own_view_not_our_forecast():
     assert "adil" not in text
 
 
+def _record(coupon):
+    return {"main": [{"coupon": coupon}], "alt": []}
+
+
 def test_an_underdog_coupon_says_it_is_not_beating_the_market():
-    text = formatting.format_daily(
-        {"main": _coupon_at(0.457, 1.85), "alt": None}, "2026-08-11"
-    )
+    text = formatting.format_daily(_record(_coupon_at(0.457, 1.85)), "2026-08-11")
     assert "daha az ihtimal verdiği taraftadır" in text
     assert "daha düşük ödeme" in text
 
 
 def test_a_favourite_coupon_drops_the_underdog_warning():
-    text = formatting.format_daily(
-        {"main": _coupon_at(0.606, 1.40), "alt": None}, "2026-08-11"
-    )
+    text = formatting.format_daily(_record(_coupon_at(0.606, 1.40)), "2026-08-11")
     assert "daha az ihtimal verdiği taraftadır" not in text
 
 
@@ -355,7 +355,7 @@ def test_asking_again_returns_the_coupon_on_record_not_a_second_build(
 
     with Database(path) as db:
         stored = db.daily_coupons_of_record(for_date)
-    assert [row["event_id"] for row in stored["daily_main"]] == [1]
+    assert [row["event_id"] for entry in stored for row in entry["legs"]] == [1]
 
 
 def test_a_rebuild_is_answered_with_the_replacement(tmp_path, monkeypatch):

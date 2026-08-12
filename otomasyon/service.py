@@ -60,28 +60,34 @@ def _build_daily(db_path: str):
 def _persist_daily(
     db_path: str, coupons, events, competitions, now, for_date, *, rebuild: bool
 ) -> None:
+    built_at = int(now.timestamp())
     if rebuild:
         with Database(db_path) as db:
-            db.supersede_daily_coupons(for_date)
+            db.supersede_daily_coupons(for_date, now=built_at)
     with Database(db_path) as db:
         db.upsert_competitions(competitions)
         db.save_events(events)
         for c in (coupons["main"], coupons["alt"]):
             if c:
-                db.save_coupon(c, for_date)
+                db.save_coupon(c, for_date, now=built_at)
     capture_shadow_predictions(db_path, events=events, now=now)
 
 
 def coupons_of_record(db_path: str, for_date: str) -> dict:
-    """Rebuild the day's stored coupons as the objects the formatter expects."""
+    """The day's stored coupons, in order, as the objects the formatter wants.
+
+    Each kind holds a list because a day can hand over more than one coupon:
+    the second is built from what is left after the first has kicked off.
+    """
     with Database(db_path) as db:
         stored = db.daily_coupons_of_record(for_date)
-    out: dict[str, engine.Coupon | None] = {"main": None, "alt": None}
-    for kind, legs in stored.items():
+    out: dict[str, list[dict]] = {"main": [], "alt": []}
+    for entry in stored:
+        legs = entry["legs"]
         if not legs:
             continue
-        out["main" if kind == "daily_main" else "alt"] = engine.Coupon(
-            kind=kind,
+        coupon = engine.Coupon(
+            kind=entry["kind"],
             legs=[
                 engine.Leg(
                     event_id=row["event_id"],
@@ -101,20 +107,25 @@ def coupons_of_record(db_path: str, for_date: str) -> dict:
                 for row in legs
             ],
         )
+        out["main" if entry["kind"] == "daily_main" else "alt"].append(
+            {
+                "id": entry["id"],
+                "coupon": coupon,
+                "results": [row["result"] for row in legs],
+            }
+        )
     return out
 
 
-def leg_results_of_record(db_path: str, for_date: str) -> dict:
-    """How the day's stored coupons are doing, leg by leg, in leg order."""
-    with Database(db_path) as db:
-        stored = db.daily_coupons_of_record(for_date)
+def as_record(coupons: dict) -> dict:
+    """A freshly built pair in the shape the day's record has."""
     return {
-        ("main" if kind == "daily_main" else "alt"): [row["result"] for row in legs]
-        for kind, legs in stored.items()
+        kind: ([{"coupon": coupon, "results": None}] if coupon else [])
+        for kind, coupon in coupons.items()
     }
 
 
-def daily_picks(coupons) -> str:
+def daily_picks(record) -> str:
     """What the reader is being told to play, ignoring how it is priced.
 
     Odds drift all day without changing the instruction, so only the
@@ -122,15 +133,17 @@ def daily_picks(coupons) -> str:
     """
     parts = []
     for kind in ("main", "alt"):
-        coupon = coupons.get(kind)
-        if coupon is None:
+        entries = record.get(kind) or []
+        if not entries:
             parts.append(f"{kind}=yok")
             continue
-        legs = ",".join(
-            f"{leg.event_id}/{leg.market_code[0]}-{leg.market_code[1]}/{leg.outcome_no}"
-            for leg in coupon.legs
-        )
-        parts.append(f"{kind}={legs}")
+        for entry in entries:
+            legs = ",".join(
+                f"{leg.event_id}/{leg.market_code[0]}-{leg.market_code[1]}"
+                f"/{leg.outcome_no}"
+                for leg in entry["coupon"].legs
+            )
+            parts.append(f"{kind}={legs}")
     return "|".join(parts)
 
 
@@ -149,15 +162,11 @@ def daily_text(
     """
     coupons, events, competitions, now, for_date = _build_daily(db_path)
     if not save:
-        return formatting.format_daily(coupons, for_date)
+        return formatting.format_daily(as_record(coupons), for_date)
     _persist_daily(
         db_path, coupons, events, competitions, now, for_date, rebuild=rebuild
     )
-    return formatting.format_daily(
-        coupons_of_record(db_path, for_date),
-        for_date,
-        results=leg_results_of_record(db_path, for_date),
-    )
+    return formatting.format_daily(coupons_of_record(db_path, for_date), for_date)
 
 
 def surprise_text(db_path: str = config.DB_PATH, *, save: bool = True) -> str:
@@ -201,13 +210,16 @@ def push_daily(
     force: bool = False,
     now: datetime | None = None,
 ) -> str | None:
-    """Proactively send today's daily coupon to the stored chat.
+    """Proactively send today's daily coupons to the stored chat.
 
-    Once a day the coupon is built and sent. After that the push follows the
-    coupon of record rather than rebuilding: if something replaced the day's
-    coupon, the reader is holding a slip that has been retired and is told so.
-    Prices move all day without changing the instruction, so a coupon that
-    merely reprices says nothing. Returns the chat id sent to, or None.
+    The day opens with a build. After that the push follows the record rather
+    than rebuilding, because prices move all day without changing the
+    instruction and a coupon that merely reprices says nothing. Two things do
+    change it. A coupon can be retired before kick-off, and then the reader is
+    holding a slip that no longer counts and is told so. Or the day's coupon
+    can have been played, and the matches that are left can carry a new one -
+    that is an addition, not a correction, and the coupons already handed over
+    keep standing. Returns the chat id sent to, or None.
     """
     now = now or datetime.now(tz=config.TIMEZONE)
     scheduled = now.replace(
@@ -226,23 +238,25 @@ def push_daily(
         pushed_date = db.get_setting("last_push_date")
         pushed_picks = db.get_setting("last_push_picks")
 
-    revision = pushed_date == today and not force
-    if revision:
-        coupons = coupons_of_record(db_path, today)
-        picks = daily_picks(coupons)
-        if picks == pushed_picks or not any(coupons.values()):
-            return None
-        text = (
-            "KUPON GÜNCELLENDİ — bugün gönderilen kupon geçersiz sayıldı, "
-            "yerine aşağıdaki geçti.\n\n"
-        ) + formatting.format_daily(coupons, today)
-    else:
+    opening = pushed_date != today or force
+    if opening or _follow_up_is_due(db_path, today, now):
         coupons, events, competitions, built_at, for_date = _build_daily(db_path)
-        picks = daily_picks(coupons)
+        if not opening:
+            coupons = _kicking_off_within(coupons, for_date)
         _persist_daily(
             db_path, coupons, events, competitions, built_at, for_date, rebuild=False
         )
-        text = formatting.format_daily(coupons, for_date)
+
+    record = coupons_of_record(db_path, today)
+    picks = daily_picks(record)
+    if not any(record.values()):
+        return None
+    if not opening:
+        if picks == pushed_picks:
+            return None
+        text = _second_message_of_the_day(record, today, pushed_picks, picks)
+    else:
+        text = formatting.format_daily(record, today)
 
     response = client.send_message(chat_id, text)
     delivered_chat_id, message_id, telegram_date = _telegram_delivery(
@@ -252,9 +266,9 @@ def push_daily(
         db.record_telegram_delivery(
             kind="daily_push",
             notification_dates=[today],
-            # A revision is a second delivery on the same day, so the receipt
-            # is keyed by what was sent as well as when.
-            dedupe_suffix=picks if revision else None,
+            # Anything after the opening push is a second delivery on the same
+            # day, so the receipt is keyed by what was sent as well as when.
+            dedupe_suffix=None if opening else picks,
             chat_id=delivered_chat_id,
             message_id=message_id,
             telegram_date=telegram_date,
@@ -262,6 +276,80 @@ def push_daily(
             markers={"last_push_date": today, "last_push_picks": picks},
         )
     return chat_id
+
+
+def _follow_up_is_due(db_path: str, for_date: str, now: datetime) -> bool:
+    """Whether a build could add a coupon to a day that already has one.
+
+    Only worth the bulletin fetch once a coupon has kicked off, and then only
+    now and again: on the days when nothing is left to build from, asking on
+    every cycle would fetch the bulletin all evening to learn the same thing.
+    """
+    now_ts = int(now.timestamp())
+    with Database(db_path) as db:
+        if not db.daily_coupon_kinds_played(for_date, now=now_ts):
+            return False
+        attempted = db.get_setting("last_follow_up_ts")
+        due = (
+            attempted is None
+            or now_ts - int(attempted) >= config.DAILY_FOLLOW_UP_RETRY_SECONDS
+        )
+        if due:
+            db.set_setting("last_follow_up_ts", str(now_ts))
+    return due
+
+
+def _kicking_off_within(coupons: dict, for_date: str) -> dict:
+    """Drop a build that has run past the day it would be filed under.
+
+    Late in the evening the build widens its window to the next 24 hours to
+    find anything at all, which is right for a day that opens thin but wrong
+    for a coupon added at midnight: it would file tomorrow's matches under
+    today, and tomorrow's own coupon could then bet on them a second time.
+    """
+    last_kickoff = int(
+        datetime.strptime(for_date, "%Y-%m-%d")
+        .replace(hour=23, minute=59, second=59, tzinfo=config.TIMEZONE)
+        .timestamp()
+    )
+    return {
+        kind: (
+            coupon
+            if coupon and all(leg.start_ts <= last_kickoff for leg in coupon.legs)
+            else None
+        )
+        for kind, coupon in coupons.items()
+    }
+
+
+def _second_message_of_the_day(
+    record: dict, for_date: str, pushed_picks: str | None, picks: str
+) -> str:
+    """Say why the day's coupons are being sent again.
+
+    Told apart by what happened to the coupons already sent. If every one of
+    them is still being offered, the day has only gained one, built from
+    matches the earlier ones had already passed. If one has gone, it was
+    retired before it could be played and the reader has to stop counting on
+    it. A kind that had nothing to offer is not something that can be lost.
+    """
+    before = {
+        pick
+        for pick in (pushed_picks or "").split("|")
+        if pick and not pick.endswith("=yok")
+    }
+    after = set(picks.split("|"))
+    if before and not before - after:
+        header = (
+            "YENİ KUPON — günün kuponu oynandı, kalan maçlar için aşağıdaki "
+            "kuruldu. Önceki kuponlar geçerliliğini korur.\n\n"
+        )
+    else:
+        header = (
+            "KUPON GÜNCELLENDİ — bugün gönderilen kupon geçersiz sayıldı, "
+            "yerine aşağıdaki geçti.\n\n"
+        )
+    return header + formatting.format_daily(record, for_date)
 
 
 def check_bot_liveness(
