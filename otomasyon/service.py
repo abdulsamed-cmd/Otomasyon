@@ -241,8 +241,6 @@ def push_daily(
     opening = pushed_date != today or force
     if opening or _follow_up_is_due(db_path, today, now):
         coupons, events, competitions, built_at, for_date = _build_daily(db_path)
-        if not opening:
-            coupons = _kicking_off_within(coupons, for_date)
         _persist_daily(
             db_path, coupons, events, competitions, built_at, for_date, rebuild=False
         )
@@ -297,29 +295,6 @@ def _follow_up_is_due(db_path: str, for_date: str, now: datetime) -> bool:
         if due:
             db.set_setting("last_follow_up_ts", str(now_ts))
     return due
-
-
-def _kicking_off_within(coupons: dict, for_date: str) -> dict:
-    """Drop a build that has run past the day it would be filed under.
-
-    Late in the evening the build widens its window to the next 24 hours to
-    find anything at all, which is right for a day that opens thin but wrong
-    for a coupon added at midnight: it would file tomorrow's matches under
-    today, and tomorrow's own coupon could then bet on them a second time.
-    """
-    last_kickoff = int(
-        datetime.strptime(for_date, "%Y-%m-%d")
-        .replace(hour=23, minute=59, second=59, tzinfo=config.TIMEZONE)
-        .timestamp()
-    )
-    return {
-        kind: (
-            coupon
-            if coupon and all(leg.start_ts <= last_kickoff for leg in coupon.legs)
-            else None
-        )
-        for kind, coupon in coupons.items()
-    }
 
 
 def _second_message_of_the_day(

@@ -20,6 +20,14 @@ from ..iddaa.normalize import (
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
+def _end_of_day(for_date: str) -> int:
+    return int(
+        datetime.strptime(for_date, "%Y-%m-%d")
+        .replace(hour=23, minute=59, second=59, tzinfo=config.TIMEZONE)
+        .timestamp()
+    )
+
+
 class Database:
     def __init__(self, path: str | os.PathLike = config.DB_PATH) -> None:
         self.path = str(path)
@@ -349,10 +357,17 @@ class Database:
                 ):
                     return existing["id"]
                 # The day already has a coupon that has been played, so this
-                # one is a follow-up and has to be playable in its own right.
-                # A build handed back from matches that have started is not.
+                # one is a follow-up, and two things are asked of it that are
+                # not asked of the day's first coupon. It has to be playable,
+                # which a build handed back from matches that have started is
+                # not. And it has to belong to the day it would be filed
+                # under: late in the evening a build widens its window into
+                # tomorrow to find anything at all, and tomorrow's own coupon
+                # could then bet on the same match a second time.
                 starts = [leg.start_ts for leg in coupon.legs if leg.start_ts]
                 if not starts or min(starts) <= now:
+                    return existing["id"]
+                if max(starts) > _end_of_day(for_date):
                     return existing["id"]
         cur.execute(
             """

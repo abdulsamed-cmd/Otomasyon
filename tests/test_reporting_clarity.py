@@ -32,7 +32,7 @@ def _event(eid, start_ts=1_786_197_600):
     )
 
 
-def _coupon(kind, eid):
+def _coupon(kind, eid, start_ts=1_786_197_600):
     return Coupon(
         kind=kind,
         legs=[
@@ -41,7 +41,7 @@ def _coupon(kind, eid):
                 home=f"Ev{eid}",
                 away=f"Dep{eid}",
                 competition="Lig",
-                start_ts=1_786_197_600,
+                start_ts=start_ts,
                 market_code=config.MARKET_OVER_UNDER,
                 market_name="Alt/Üst",
                 sov="3.5",
@@ -367,6 +367,71 @@ def test_a_rebuild_is_answered_with_the_replacement(tmp_path, monkeypatch):
 
     _stub_build(monkeypatch, {"main": _coupon("daily_main", 2), "alt": None}, for_date)
     assert "Ev2 - Dep2" in service.daily_text(path, rebuild=True)
+
+
+EVENING = "2026-08-12"
+
+
+def _at(hour, *, day=EVENING):
+    return datetime.strptime(day, "%Y-%m-%d").replace(
+        hour=hour, tzinfo=config.TIMEZONE
+    )
+
+
+def _stub_one(monkeypatch, *, event_id, kickoff, asked_at):
+    """A build offering one match, handed back at a stated hour of the evening."""
+    monkeypatch.setattr(service, "capture_shadow_predictions", lambda *a, **k: None)
+    start_ts = int(kickoff.timestamp())
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda _p: (
+            {"main": _coupon("daily_main", event_id, start_ts=start_ts), "alt": None},
+            [_event(event_id, start_ts)],
+            COMPETITIONS,
+            asked_at,
+            EVENING,
+        ),
+    )
+
+
+def test_asking_for_the_coupon_cannot_add_one_that_belongs_to_tomorrow(
+    tmp_path, monkeypatch
+):
+    """The command builds and stores too, so it needs the push's rule as well.
+
+    Late enough in the evening the build widens its window to the next 24
+    hours to find anything at all. Filed under today because that is the day
+    being asked about, tomorrow's match could then be bet on a second time by
+    tomorrow's own coupon.
+    """
+    path = str(tmp_path / "tomorrow.db")
+    _stub_one(monkeypatch, event_id=1, kickoff=_at(18), asked_at=_at(10))
+    assert "Ev1 - Dep1" in service.daily_text(path)
+
+    _stub_one(
+        monkeypatch,
+        event_id=2,
+        kickoff=_at(1, day="2026-08-13"),
+        asked_at=_at(21),
+    )
+    text = service.daily_text(path)
+    assert "Ev2 - Dep2" not in text
+    assert len(service.coupons_of_record(path, EVENING)["main"]) == 1
+
+
+def test_asking_for_the_coupon_can_add_one_still_to_be_played_today(
+    tmp_path, monkeypatch
+):
+    # The counterpart: a match left tonight is what a follow-up is for.
+    path = str(tmp_path / "tonight.db")
+    _stub_one(monkeypatch, event_id=1, kickoff=_at(18), asked_at=_at(10))
+    service.daily_text(path)
+
+    _stub_one(monkeypatch, event_id=2, kickoff=_at(23), asked_at=_at(21))
+    text = service.daily_text(path)
+    assert "Ev1 - Dep1" in text and "Ev2 - Dep2" in text
+    assert len(service.coupons_of_record(path, EVENING)["main"]) == 2
 
 
 def test_the_days_coupon_carries_the_results_it_already_has(tmp_path, monkeypatch):
