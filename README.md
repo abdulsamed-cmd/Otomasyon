@@ -451,7 +451,10 @@ python3 -m pip install -r requirements-dev.txt
 python3 -m otomasyon.cli fetch --sample 3
 ```
 
-Veritabanı varsayılan olarak `data/otomasyon.db` (git'e dahil değil).
+Veritabanı varsayılan olarak `~/.otomasyon/otomasyon.db` (git'e dahil değil).
+Kasıtlı olarak çalışma kopyasının dışındadır: klasör yeniden klonlandığında
+sonuçlanmış kuponların da silinmesi böyle engellenir. Halihazırda
+`data/otomasyon.db` kullanan bir kurulum varsa oradan okunmaya devam edilir.
 `OTOMASYON_DB` ortam değişkeni ile yol değiştirilebilir.
 
 ## Testler
