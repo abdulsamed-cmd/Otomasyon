@@ -8,13 +8,15 @@ bot feels alive. Run against the live database while the bot is polling.
 from __future__ import annotations
 
 import argparse
+
+from otomasyon import config
 import sqlite3
 import time
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="data/otomasyon.db")
+    parser.add_argument("--db", default=config.DB_PATH)
     parser.add_argument("--minutes", type=float, default=20.0)
     parser.add_argument("--sample-seconds", type=float, default=3.0)
     parser.add_argument(

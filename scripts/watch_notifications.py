@@ -7,6 +7,8 @@ notifications and command replies go out without manual intervention.
 from __future__ import annotations
 
 import argparse
+
+from otomasyon import config
 import sqlite3
 import time
 
@@ -19,7 +21,7 @@ def _stamp(ts: float | None) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="data/otomasyon.db")
+    parser.add_argument("--db", default=config.DB_PATH)
     parser.add_argument("--minutes", type=float, default=30.0)
     parser.add_argument("--interval", type=float, default=60.0)
     args = parser.parse_args()
