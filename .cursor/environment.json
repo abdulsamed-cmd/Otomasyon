@@ -1,4 +1,5 @@
 {
   "name": "Otomasyon",
-  "install": "python3 -m pip install --user -r requirements-dev.txt"
+  "install": "python3 -m pip install --user -r requirements-dev.txt",
+  "start": "bash scripts/start_services.sh"
 }
