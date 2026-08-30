@@ -226,6 +226,26 @@ def test_every_pooled_market_can_be_graded(code):
     assert graded.count(s.WIN) == expected_winners
 
 
+def test_a_market_taken_out_of_the_pool_can_still_be_graded():
+    """Leaving the pool must not strand the coupons already holding it.
+
+    A market is dropped so that no new leg comes from it, which says nothing
+    about the legs already bought. Those still have to be decided, or a reader
+    is left with a coupon that can never close.
+    """
+    assert config.MARKET_HIGHER_SCORING_HALF not in config.DAILY_COUPON_MARKETS
+    _, sov, outcomes = BULLETIN_VOCABULARY[HIGH_HALF]
+    graded = [
+        settle_leg(*HIGH_HALF, sov, outcome, r(3, 0, ht_h=2, ht_a=0))
+        for outcome in outcomes
+    ]
+    assert s.VOID not in graded
+    assert graded.count(s.WIN) == 1
+    # Two goals before the break against one after: the first half scored more.
+    assert dict(zip(outcomes, graded))["1."] is s.WIN
+    assert dict(zip(outcomes, graded))["2."] is s.LOSE
+
+
 def _leg(event_id, code, outcome, odd, sov=None):
     return {
         "event_id": event_id,

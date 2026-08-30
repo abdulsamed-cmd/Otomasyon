@@ -105,6 +105,13 @@ MARKET_OUTCOME_COVERAGE = {
 # families are not extra legs, they are better-priced answers to the one leg
 # that match is allowed to contribute.
 #
+# Hangi Yarıda Daha Fazla Gol is absent at the reader's request, after three
+# alternatives running were built on it and the first two lost. It stays
+# settleable, so the coupons already carrying it still grade. The archive does
+# not convict it - "2." landed 48.5% against a 44.1% price over 460 archived
+# matches - so this is a preference and is recorded as one, in case a later
+# reader takes its absence for a measured verdict.
+#
 # Tek/Çift is settleable and priced at the same margin, but it is deliberately
 # absent: goal parity landed 50.0% against a 50.0% price over 1,638 archived
 # legs, which is a coin no amount of team knowledge can call.
@@ -118,7 +125,6 @@ DAILY_COUPON_MARKETS = (
     MARKET_HT_OVER_UNDER,
     MARKET_HT_BTTS,
     MARKET_SECOND_HALF_RESULT,
-    MARKET_HIGHER_SCORING_HALF,
     MARKET_HOME_OVER_UNDER,
     MARKET_AWAY_OVER_UNDER,
     MARKET_HOME_HT_OVER_UNDER,
