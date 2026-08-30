@@ -24,7 +24,27 @@ USER_AGENT = (
 )
 
 # --- Storage ---------------------------------------------------------------
-DB_PATH = os.environ.get("OTOMASYON_DB", os.path.join("data", "otomasyon.db"))
+LEGACY_DB_PATH = os.path.join("data", "otomasyon.db")
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser("~"), ".otomasyon", "otomasyon.db")
+
+
+def _default_db_path() -> str:
+    """Where the record lives when the environment does not say.
+
+    Not inside the checkout. A working copy is disposable - it gets re-cloned,
+    and a record kept inside one goes with it, which is how a fortnight of
+    settled coupons was lost. Settled bets are not a build artefact and should
+    not share the fate of one.
+
+    The old path is still used while it is the one holding the record, so an
+    install that has been writing there does not wake up to an empty history.
+    """
+    if not os.path.exists(DEFAULT_DB_PATH) and os.path.exists(LEGACY_DB_PATH):
+        return LEGACY_DB_PATH
+    return DEFAULT_DB_PATH
+
+
+DB_PATH = os.environ.get("OTOMASYON_DB", _default_db_path())
 
 # --- Market codes ----------------------------------------------------------
 # Each iddaa market is identified by a (type, subtype) pair == config key
