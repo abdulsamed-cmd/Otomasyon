@@ -908,6 +908,15 @@ def shadow_model_metrics(
         ** 2
         for row in rows
     ]
+    # The market's score on these same bets. A model's Brier means nothing on
+    # its own - it has to be read against what the price it disagreed with
+    # scored on the very matches it disagreed about. Reported separately, a
+    # number from one sample gets compared with a number from another, and a
+    # model that loses to the price can be made to look as if it beats it.
+    market_brier = [
+        (row["market_fair"] - (1.0 if row["result"] == "win" else 0.0)) ** 2
+        for row in rows
+    ]
     roi, interval = roi_interval(profits)
     return {
         "model_version": model_version,
@@ -916,6 +925,9 @@ def shadow_model_metrics(
         "roi": roi,
         "roi_ci95": interval,
         "brier": statistics.mean(brier) if brier else None,
+        "market_brier": (
+            statistics.mean(market_brier) if market_brier else None
+        ),
         "gate_passed": (
             len(rows) >= config.MODEL_GATE_MIN_BETS
             and interval is not None
@@ -1683,6 +1695,26 @@ def host_downtime_text(db_path: str, *, since_ts: int | None = None) -> str:
     )
 
 
+def _brier_text(metrics: dict) -> str:
+    """A model's Brier beside the price's, on the same bets.
+
+    Printed alone it invites the reader to compare it with whatever market
+    figure is nearest on the screen, which came from a different sample. The
+    verdict belongs on the line, not in the reader's arithmetic.
+    """
+    if metrics["brier"] is None:
+        return "Brier: veri yok"
+    market = metrics.get("market_brier")
+    if market is None:
+        return f"Brier: {metrics['brier']:.4f}"
+    fark = metrics["brier"] - market
+    kim = "model" if fark < 0 else "piyasa"
+    return (
+        f"Brier model/piyasa: {metrics['brier']:.4f}/{market:.4f} "
+        f"({kim} önde, fark {abs(fark):.4f})"
+    )
+
+
 def model_status_text(db_path: str) -> str:
     processes = metrics_by_kind(db_path)
     shadow = shadow_model_metrics(db_path)
@@ -1765,31 +1797,23 @@ def model_status_text(db_path: str) -> str:
                 f"{walk_forward['all_predictions']} edge uygun"
             ),
             roi_text(walk_forward["roi"], walk_forward["roi_ci95"]),
-            (
-                f"Brier model/piyasa: {walk_forward['model_brier']:.4f}/"
-                f"{walk_forward['market_brier']:.4f}"
-                if walk_forward["model_brier"] is not None
-                else "Brier model/piyasa: veri yok"
+            _brier_text(
+                {
+                    "brier": walk_forward["model_brier"],
+                    "market_brier": walk_forward["market_brier"],
+                }
             ),
             "",
             f"xG gölge ({shadow['model_version']}) — {shadow['predictions']}/"
             f"{config.MODEL_GATE_MIN_BETS} sonuç",
             roi_text(shadow["roi"], shadow["roi_ci95"]),
-            (
-                f"Brier: {shadow['brier']:.3f}"
-                if shadow["brier"] is not None
-                else "Brier: veri yok"
-            ),
+            _brier_text(shadow),
             f"Kapı: {'GEÇTİ' if shadow['gate_passed'] else 'BEKLİYOR'}",
             "",
             f"Gol+Elo gölge ({goal_shadow['model_version']}) — "
             f"{goal_shadow['predictions']}/{config.MODEL_GATE_MIN_BETS} sonuç",
             roi_text(goal_shadow["roi"], goal_shadow["roi_ci95"]),
-            (
-                f"Brier: {goal_shadow['brier']:.3f}"
-                if goal_shadow["brier"] is not None
-                else "Brier: veri yok"
-            ),
+            _brier_text(goal_shadow),
             f"Kapı: {'GEÇTİ' if goal_shadow['gate_passed'] else 'BEKLİYOR'}",
             "",
             (
