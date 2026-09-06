@@ -1,6 +1,10 @@
+import random
 from datetime import datetime
+from itertools import combinations
 
-from otomasyon import config, engine
+import pytest
+
+from otomasyon import config, engine, probability
 from otomasyon.iddaa.normalize import (
     NormalizedEvent,
     NormalizedMarket,
@@ -214,7 +218,7 @@ def test_combination_markets_are_not_offered_to_the_coupon():
 
 def test_expected_value_gate_can_refuse_an_unprofitable_coupon():
     coupons = engine.build_daily_coupons(_events(), now=NOW, min_expected_value=0.0)
-    assert coupons == {"main": None, "alt": None}
+    assert coupons == {"main": None, "alt": None, "mix": None}
 
 
 def test_daily_pool_excludes_friendlies_even_with_attractive_odds():
@@ -225,3 +229,132 @@ def test_daily_pool_excludes_friendlies_even_with_attractive_odds():
         [friendly, regular], int(NOW.timestamp()), int(NOW.timestamp()) + 7200
     )
     assert {leg.event_id for leg in pool} == {100}
+
+
+# --- the mixed coupon ------------------------------------------------------
+
+
+def _pool_of(events):
+    return engine._select_pool(
+        events, int(NOW.timestamp()), int(NOW.timestamp()) + 7200
+    )
+
+
+def _every_build(pool, exclude_events=frozenset()):
+    """Each coupon the rules permit, as (payout, chance of landing).
+
+    Written out longhand so the search can be checked against the answer
+    rather than against itself.
+    """
+    legs = [leg for leg in pool if leg.event_id not in exclude_events]
+    for size in range(config.DAILY_MIN_LEGS, config.DAILY_MAX_LEGS + 1):
+        for combo in combinations(legs, size):
+            if len({leg.event_id for leg in combo}) != size:
+                continue
+            if any(leg.mbs > size for leg in combo):
+                continue
+            yield (
+                probability.total_odds(leg.odd for leg in combo),
+                probability.combined_probability(leg.win_prob for leg in combo),
+            )
+
+
+def test_the_mixed_coupon_is_the_best_paying_build_that_lands_often_enough():
+    pool = _pool_of(_events())
+    mix = engine._richest_coupon(pool, exclude_events=set(), min_prob=0.25)
+    assert mix is not None
+    assert mix.combined_prob >= 0.25
+    richest = max(
+        payout for payout, prob in _every_build(pool) if prob >= 0.25
+    )
+    assert mix.total_odds == pytest.approx(richest)
+
+
+def test_the_mixed_coupon_reaches_past_where_one_selection_stops():
+    # Every single that lands often enough pays less than 2.83, so the payout
+    # can only be reached across two matches - which is the whole reason the
+    # coupon exists.
+    coupons = engine.build_daily_coupons(_events(), now=NOW)
+    mix = coupons["mix"]
+    assert mix is not None
+    assert len(mix.legs) == 2
+    assert mix.total_odds > max(leg.odd for leg in mix.legs)
+    assert mix.total_odds > coupons["alt"].total_odds
+
+
+def test_the_mixed_coupon_plays_matches_the_other_two_are_not_on():
+    coupons = engine.build_daily_coupons(_events(), now=NOW)
+    main, alt, mix = coupons["main"], coupons["alt"], coupons["mix"]
+    assert mix.event_ids.isdisjoint(main.event_ids)
+    assert mix.event_ids.isdisjoint(alt.event_ids)
+
+
+@pytest.mark.parametrize("floor", [0.20, 0.25, 0.30, 0.35, 0.45])
+def test_asking_the_mixed_coupon_to_land_more_often_makes_it_pay_less(floor):
+    pool = _pool_of(_events())
+    mix = engine._richest_coupon(pool, exclude_events=set(), min_prob=floor)
+    assert mix is not None
+    assert mix.combined_prob >= floor
+    richest = max(
+        payout for payout, prob in _every_build(pool) if prob >= floor
+    )
+    assert mix.total_odds == pytest.approx(richest)
+
+
+def test_the_payout_falls_as_the_coupon_is_asked_to_land_more_often():
+    pool = _pool_of(_events())
+    payouts = [
+        engine._richest_coupon(pool, set(), min_prob=floor).total_odds
+        for floor in (0.20, 0.30, 0.40, 0.50)
+    ]
+    assert payouts == sorted(payouts, reverse=True)
+
+
+def test_no_mixed_coupon_when_nothing_lands_that_often():
+    # The board's safest selection is a 64% shot, so a coupon asked to land
+    # nine times in ten cannot be built and is not invented.
+    coupons = engine.build_daily_coupons(_events(), now=NOW, mix_min_prob=0.90)
+    assert coupons["mix"] is None
+
+
+def test_the_mixed_coupon_honours_the_minimum_bet_size():
+    # The long side of each match is what a big payout needs, but iddaa will
+    # not take these markets on a slip shorter than two matches.
+    events = [_mbs_event(index, 1.45, 2.55, mbs=2) for index in range(1, 7)]
+    mix = engine.build_daily_coupons(events, now=NOW, mix_min_prob=0.10)["mix"]
+    assert mix is not None
+    assert len(mix.legs) >= max(leg.mbs for leg in mix.legs)
+    # The payout it wants is on the outsiders, and it took both of them.
+    assert all(leg.outcome_name == "Üst" for leg in mix.legs)
+
+
+def test_the_mixed_coupon_finds_the_best_payout_on_boards_it_has_not_seen():
+    # The search brackets the payout and closes in on it rather than looking
+    # at every build, so it is checked against the exhaustive answer on boards
+    # it was not tuned against.
+    rng = random.Random(20260906)
+    for _ in range(40):
+        events = [
+            _ou_event(index, round(rng.uniform(1.2, 2.6), 2), round(rng.uniform(1.2, 3.5), 2))
+            for index in range(1, rng.randint(2, 6))
+        ]
+        pool = _pool_of(events)
+        if not pool:
+            continue
+        for floor in (0.15, 0.3, 0.5):
+            builds = [
+                payout for payout, prob in _every_build(pool) if prob >= floor
+            ]
+            mix = engine._richest_coupon(pool, set(), min_prob=floor)
+            if not builds:
+                assert mix is None
+                continue
+            assert mix is not None
+            assert mix.combined_prob >= floor
+            assert mix.total_odds == pytest.approx(max(builds))
+
+
+def test_the_mixed_coupon_can_be_left_out_of_a_build():
+    coupons = engine.build_daily_coupons(_events(), now=NOW, with_mix=False)
+    assert coupons["mix"] is None
+    assert coupons["main"] is not None

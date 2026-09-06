@@ -231,6 +231,11 @@ def replay_daily(
             min_expected_value=min_expected_value,
             main_min_odds=main_floor,
             alt_min_odds=alt_floor,
+            # The archive carries 1X2 and O/U 2.5 and nothing else, so a mixed
+            # coupon replayed on it would be built from a board that shares
+            # almost nothing with the live one. Answering for it here would be
+            # inventing a track record rather than recovering one.
+            with_mix=False,
         )
         if coupons["main"]:
             main_results.append(

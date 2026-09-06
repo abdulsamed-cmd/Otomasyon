@@ -57,6 +57,17 @@ def _build_daily(db_path: str):
     return coupons, events, competitions, now, now.strftime("%Y-%m-%d")
 
 
+# A coupon is a ``kind`` once it is stored and a slot everywhere the engine and
+# the formatter deal with it. The order is the order a day's coupons are built,
+# saved and presented in.
+_SLOT_OF_KIND = {
+    "daily_main": "main",
+    "daily_alt": "alt",
+    "daily_mix": "mix",
+}
+_RECORD_SLOTS = tuple(_SLOT_OF_KIND.values())
+
+
 def _persist_daily(
     db_path: str, coupons, events, competitions, now, for_date, *, rebuild: bool
 ) -> None:
@@ -67,9 +78,10 @@ def _persist_daily(
     with Database(db_path) as db:
         db.upsert_competitions(competitions)
         db.save_events(events)
-        for c in (coupons["main"], coupons["alt"]):
-            if c:
-                db.save_coupon(c, for_date, now=built_at)
+        for slot in _RECORD_SLOTS:
+            coupon = coupons.get(slot)
+            if coupon:
+                db.save_coupon(coupon, for_date, now=built_at)
     capture_shadow_predictions(db_path, events=events, now=now)
 
 
@@ -81,7 +93,7 @@ def coupons_of_record(db_path: str, for_date: str) -> dict:
     """
     with Database(db_path) as db:
         stored = db.daily_coupons_of_record(for_date)
-    out: dict[str, list[dict]] = {"main": [], "alt": []}
+    out: dict[str, list[dict]] = {slot: [] for slot in _RECORD_SLOTS}
     for entry in stored:
         legs = entry["legs"]
         if not legs:
@@ -107,7 +119,10 @@ def coupons_of_record(db_path: str, for_date: str) -> dict:
                 for row in legs
             ],
         )
-        out["main" if entry["kind"] == "daily_main" else "alt"].append(
+        slot = _SLOT_OF_KIND.get(entry["kind"])
+        if slot is None:
+            continue
+        out[slot].append(
             {
                 "id": entry["id"],
                 "coupon": coupon,
@@ -132,10 +147,10 @@ def daily_picks(record) -> str:
     selections identify a coupon for the purpose of noticing it has changed.
     """
     parts = []
-    for kind in ("main", "alt"):
-        entries = record.get(kind) or []
+    for slot in _RECORD_SLOTS:
+        entries = record.get(slot) or []
         if not entries:
-            parts.append(f"{kind}=yok")
+            parts.append(f"{slot}=yok")
             continue
         for entry in entries:
             legs = ",".join(
@@ -143,7 +158,7 @@ def daily_picks(record) -> str:
                 f"/{leg.outcome_no}"
                 for leg in entry["coupon"].legs
             )
-            parts.append(f"{kind}={legs}")
+            parts.append(f"{slot}={legs}")
     return "|".join(parts)
 
 
@@ -1748,8 +1763,9 @@ def model_status_text(db_path: str) -> str:
     labels = {
         "daily_main": "Ana kupon",
         "daily_alt": "Alternatif",
+        "daily_mix": "Karma kupon",
     }
-    for kind in ("daily_main", "daily_alt"):
+    for kind in config.DAILY_COUPON_KINDS:
         item = processes[kind]
         clv = (
             f"{item['avg_clv']*100:+.1f}% ({item['clv_samples']})"
