@@ -144,6 +144,29 @@ DAILY_ALT_MIN_ODDS = 2.00
 DAILY_MIN_LEGS = 1
 DAILY_MAX_LEGS = 5
 
+# The mixed coupon asks the same question from the other side: the payout is
+# free and the chance of landing is what is pinned. It is the only one of the
+# three that can reach past 2.53, which is where a single leg runs out -
+# ``LEG_MIN_FAIR_PROB`` forbids a lone selection priced longer than that - so
+# above it a coupon has to span matches and the mixed coupon is the only
+# instrument for the band.
+#
+# It is stated as a probability rather than a payout because that is the thing
+# worth holding steady. What a given chance of landing is worth changes with
+# the bulletin, and pinning the payout instead would quietly let the odds of
+# landing drift from day to day.
+#
+# 0.25 was chosen off a live bulletin: it puts the coupon around 3.20-3.50,
+# clear of the alternative's 2.00 without falling into the long-shot range
+# where nothing lands often enough to ever be measured.
+DAILY_MIX_MIN_PROB = 0.25
+
+# The three coupons a day is made of. They are kept apart everywhere - in the
+# record, in the push, and in the evidence gates - because each is a different
+# bet on a different part of the board and pooling them would hide which one is
+# working.
+DAILY_COUPON_KINDS = ("daily_main", "daily_alt", "daily_mix")
+
 # Sanity floor for a leg: below this the outcome is simply unlikely, whatever
 # the search thinks of it. It is deliberately low, because the objective
 # already punishes weak legs - a single leg paying 2.00 is a ~0.44 shot and
@@ -296,6 +319,7 @@ CALIBRATION_MIN_MODEL_GAIN = 0.002
 PERFORMANCE_GATE_MIN_MATCHES = {
     "daily_main": 200,
     "daily_alt": 200,
+    "daily_mix": 200,
     "surprise": 100,
 }
 

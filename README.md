@@ -12,7 +12,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 
 - [x] Veri kaynağı keşfi — iddaa genel JSON API (`sportsbookv2.iddaa.com`)
 - [x] Veri katmanı — istemci, normalize, SQLite depolama, adil olasılık
-- [x] Güvenli kupon motoru (ana + alternatif, hedef oran bandı, serbest bacak sayısı)
+- [x] Güvenli kupon motoru (ana + alternatif + karma, hedef oran bandı, serbest bacak sayısı)
 - [x] Sürpriz modülü (6+ Gol, sistem senaryoları)
 - [x] Sürpriz aday/sonuç persistence + 2'li sistem teorik ROI kapısı
 - [x] Telegram botu (`bugün` / `sürpriz` / `kadro` / `durum`, tek kullanıcı) + proaktif gönderim
@@ -32,7 +32,7 @@ ortalama oran, kalibrasyon, kapanış oranına göre değer/CLV) hesaplar.
 
 ```bash
 python3 -m otomasyon.cli fetch [--sample N]   # bülteni çek/sakla
-python3 -m otomasyon.cli coupon               # günün ana + alternatif kuponu
+python3 -m otomasyon.cli coupon               # günün ana + alternatif + karma kuponu
 python3 -m otomasyon.cli surprise             # sürpriz laboratuvarı
 python3 -m otomasyon.cli bot                  # Telegram komut/chat botu
 python3 -m otomasyon.cli scheduler            # planlı arşiv/bildirim/capture döngüsü
@@ -177,7 +177,7 @@ talimat değişmediği için yalnız fiyatı değişen kupon sessiz kalır. Aksi
 zamanlayıcı saatte onlarca kez sorduğundan kupon sürekli yeniden gönderilirdi.
 
 Her gün `09:45`te, `10:00` kuponundan önce ayrı bir model sağlık bildirimi
-gönderilir. Ana/alternatif ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
+gönderilir. Ana/alternatif/karma ROI ve %95 güven aralığı, CLV, xG gölge ROI/Brier,
 6+ Gol isabet/ROI ve kanıt kapısı durumu bu raporda yer alır.
 İzinli kullanıcı aynı raporu istediği anda Telegram'da `durum` yazarak alabilir;
 bu istek planlı günlük bildirimin deduplication durumunu değiştirmez.
@@ -235,9 +235,9 @@ dönemi, başarısız kuralları test sonucuna göre ayarlamamak için açılmad
 
 ### Kupon nasıl kuruluyor
 
-Her kupona tek bir soru soruluyor: **en az şu kadar ödeyen kurgular arasında
-en olası olan hangisi?** Ana kupon en az `1.50`, alternatif en az `2.00`
-ödemek zorunda; üst sınır yok. Bacak sayısı `1`'den `5`'e kadar serbest ve her
+Günün iki kuponuna tek bir soru soruluyor: **en az şu kadar ödeyen kurgular
+arasında en olası olan hangisi?** Ana kupon en az `1.50`, alternatif en az
+`2.00` ödemek zorunda; üst sınır yok. Bacak sayısı `1`'den `5`'e kadar serbest ve her
 biri ayrı ayrı aranıp karşılaştırılıyor — kısa kupon önce denenip orada
 durulmuyor.
 
@@ -264,6 +264,32 @@ kupon daha seyrek tutar. Arşivdeki 75 bin maçta `1.85–2.15` fiyatlı tek bir
 seçim `%41,6` tutarken, aynı 2.00'ı veren iki `~1.41` bacak `%32,7` tutuyor.
 Her bacak fiyatının tabanın altında kaldığı günlerde ise arama kendiliğinden
 çoklu bacağa geçiyor.
+
+### Karma kupon: aynı soruyu ters yönden sormak
+
+Üçüncü kupon fiyatı değil **tutma olasılığını** sabitliyor: *en az `%25`
+tutan kurgular arasında en çok ödeyen hangisi?* Ödeme hedefi yok, bacak sayısı
+serbest, pazar ailesi serbest.
+
+Ters yönden sorulmasının sebebi ölçüm. `LEG_MIN_FAIR_PROB` tek bir seçimin
+`2.53`'ten uzun fiyatlanmasına izin vermiyor, yani o bandın ötesinde kupon
+zorunlu olarak maça yayılıyor ve orada çok bacak "daha kötü bir tekli" değil,
+tek araç oluyor. Bandın berisinde ise tam tersi geçerli: 331 maçlık canlı bir
+bültende güvenli bacakları `2.01`'e kadar üst üste koymak 5 maç, `%27,4` tutma
+ve `%81,7` kupon marjı veriyor; aynı parayı ödeyen tek seçim `%44,1` tutuyor ve
+`%13,3` marj taşıyor. Her ek bacak kupona bir marj daha çarptığı için "güvenli
+bacakları yığ" kurgusu her ödeme seviyesinde mevcut kuponlara yeniliyor.
+
+Bacak sayısı burada da dayatılmıyor. Arama her ödemede en olası kurguyu
+döndürüyor, en olası kurgu da en az marj taşıyan olduğu için kaç maça
+yayılacağı aritmetikten çıkıyor. Karma kupon ana ve alternatif kuponun
+maçlarını kullanmıyor; üçü ayrı ayrı sonuçlansın ve hangisinin işlediği kayıttan
+okunabilsin diye.
+
+Kanıt kapısı da ayrı (`PERFORMANCE_GATE_MIN_MATCHES`): karma kuponun sonuçları
+diğer ikisiyle havuzlanmıyor. Arşiv yalnız 1X2 ve A/Ü 2.5 fiyatlıyor, o yüzden
+tarihsel replay karma kupon kurmuyor — orada üretilecek bir geçmiş, kurtarılmış
+değil uydurulmuş olurdu.
 
 ### Hedef fiyat: ürünün asıl ayarı
 
@@ -414,7 +440,7 @@ daha iyi kalmıştır. Bu nedenle `xg-ou-v1` canlı kapısı kapalıdır.
 
 ## Web dashboard
 
-`/` yalnız toplu ve sonuçlanmış verileri gösterir: ana, alternatif ve sürpriz
+`/` yalnız toplu ve sonuçlanmış verileri gösterir: ana, alternatif, karma ve sürpriz
 için ayrı kupon sayısı, isabet, ortalama oran, ROI ve kanıt kapısı. Açık
 response'a takım, maç, pazar veya seçim alanları gönderilmez.
 

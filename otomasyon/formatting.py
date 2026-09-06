@@ -37,19 +37,23 @@ def format_coupon(title: str, coupon, results=None) -> str:
     return "\n".join(lines)
 
 
-_DAILY_TITLES = {"main": "ANA KUPON", "alt": "ALTERNATİF"}
+_DAILY_TITLES = {
+    "main": "ANA KUPON",
+    "alt": "ALTERNATİF",
+    "mix": "KARMA KUPON",
+}
 
 
 def format_daily(record: dict, for_date: str) -> str:
-    if not record.get("main") and not record.get("alt"):
+    if not any(record.get(slot) for slot in _DAILY_TITLES):
         return (
             f"Günün kuponu ({for_date}) henüz hazır değil.\n"
             f"En az {config.DAILY_MAIN_MIN_ODDS:.2f} ödeyen uygun kurgu "
             "bulunamadı."
         )
     parts = [f"GÜNÜN DÜŞÜK RİSKLİ KUPONLARI ({for_date})", ""]
-    for kind, title in _DAILY_TITLES.items():
-        entries = record.get(kind) or []
+    for slot, title in _DAILY_TITLES.items():
+        entries = record.get(slot) or []
         if not entries:
             parts.append(format_coupon(title, None))
             parts.append("")
@@ -86,6 +90,7 @@ def format_daily(record: dict, for_date: str) -> str:
 _KIND_LABELS = {
     "daily_main": "Ana Kupon",
     "daily_alt": "Alternatif Kupon",
+    "daily_mix": "Karma Kupon",
     "surprise": "Sürpriz Kupon",
 }
 _STATUS_LABELS = {

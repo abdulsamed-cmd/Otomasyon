@@ -307,7 +307,7 @@ CREATE INDEX IF NOT EXISTS idx_fotmob_lineup_player
 -- Generated coupons (daily main/alt, surprise). No auto-play; informational.
 CREATE TABLE IF NOT EXISTS coupons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind             TEXT NOT NULL,        -- daily_main | daily_alt | surprise
+    kind             TEXT NOT NULL,        -- daily_main | daily_alt | daily_mix | surprise
     created_ts       INTEGER NOT NULL,
     for_date         TEXT NOT NULL,        -- YYYY-MM-DD (Europe/Istanbul)
     total_odds       REAL NOT NULL,

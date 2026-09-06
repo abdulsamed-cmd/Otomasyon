@@ -19,6 +19,12 @@ from ..iddaa.normalize import (
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+# The daily kinds, as a fragment a query can bind against. Written once so a
+# kind added to the config cannot be picked up by some of the queries that
+# read the day's record and missed by the others.
+_DAILY_KINDS = tuple(config.DAILY_COUPON_KINDS)
+_DAILY_KIND_SLOTS = ",".join("?" * len(_DAILY_KINDS))
+
 
 def _end_of_day(for_date: str) -> int:
     return int(
@@ -333,7 +339,7 @@ class Database:
         """
         now = now or int(time.time())
         cur = self.conn.cursor()
-        if coupon.kind in ("daily_main", "daily_alt"):
+        if coupon.kind in _DAILY_KINDS:
             # Only a coupon that can still be played answers for the day. A
             # superseded one has been retired, and one whose first match has
             # kicked off has been handed over: a build from the matches that
@@ -409,13 +415,13 @@ class Database:
         a way of ceasing to have been today's coupon.
         """
         coupons = self.conn.execute(
-            """
+            f"""
             SELECT id, kind, status FROM coupons
             WHERE for_date=? AND status<>'superseded'
-              AND kind IN ('daily_main','daily_alt')
+              AND kind IN ({_DAILY_KIND_SLOTS})
             ORDER BY id
             """,
-            (for_date,),
+            (for_date, *_DAILY_KINDS),
         ).fetchall()
         out: list[dict] = []
         for coupon in coupons:
@@ -449,14 +455,14 @@ class Database:
         """
         now = int(time.time()) if now is None else now
         rows = self.conn.execute(
-            """
+            f"""
             SELECT c.kind, MAX(c.id) AS id
             FROM coupons c
             WHERE c.for_date=? AND c.status<>'superseded'
-              AND c.kind IN ('daily_main','daily_alt')
+              AND c.kind IN ({_DAILY_KIND_SLOTS})
             GROUP BY c.kind
             """,
-            (for_date,),
+            (for_date, *_DAILY_KINDS),
         ).fetchall()
         played = []
         for row in rows:
@@ -484,17 +490,17 @@ class Database:
         matches that are still going to be played.
         """
         rows = self.conn.execute(
-            """
+            f"""
             SELECT c.id, MIN(e.start_ts) AS first_start
             FROM coupons c
             JOIN coupon_legs cl ON cl.coupon_id=c.id
             LEFT JOIN events e ON e.id=cl.event_id
             WHERE c.for_date=? AND c.status='pending'
-              AND c.kind IN ('daily_main','daily_alt')
+              AND c.kind IN ({_DAILY_KIND_SLOTS})
               AND (c.notes IS NULL OR c.notes <> 'superseded')
             GROUP BY c.id
             """,
-            (for_date,),
+            (for_date, *_DAILY_KINDS),
         ).fetchall()
         now = int(time.time()) if now is None else now
         retired = [

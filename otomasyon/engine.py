@@ -1,8 +1,12 @@
 """Daily coupon engine.
 
-Each coupon answers one question: **what is the likeliest thing we can build
-that pays at least X, and can actually be played?** The main coupon exists to
-land often and asks for a modest payout; the alternative asks for 2.00 or more.
+Two of the day's coupons answer one question: **what is the likeliest thing we
+can build that pays at least X, and can actually be played?** The main coupon
+exists to land often and asks for a modest payout; the alternative asks for
+2.00 or more. The mixed coupon asks the same question with the two sides
+swapped - the payout is free and the chance of landing is what is fixed - so
+it reaches the part of the board the other two cannot: past 2.53 no single
+selection is allowed, so a coupon there has to span matches.
 
 Within that, nothing is prescribed. Leg count is free from 1 to
 ``DAILY_MAX_LEGS``, there is no upper bound on the payout, and every size is
@@ -20,7 +24,9 @@ is where a model's opinion enters. With no provider the engine falls back to
 the market's own margin-free prices, in which case it is a price-taker and the
 search is only shopping for the best price.
 
-The alternative coupon reuses no match from the main coupon.
+No match is used twice in a day. The alternative reuses nothing from the main
+coupon and the mixed coupon reuses nothing from either, so the three land or
+fail on their own and the record can say which of them works.
 
 Nothing here places bets - coupons are informational only.
 """
@@ -77,7 +83,7 @@ class Leg:
 
 @dataclass
 class Coupon:
-    kind: str  # daily_main | daily_alt
+    kind: str  # daily_main | daily_alt | daily_mix
     legs: list[Leg] = field(default_factory=list)
 
     @property
@@ -312,6 +318,76 @@ def _best_coupon(
     return Coupon(kind="daily", legs=chosen)
 
 
+# How close the payout search has to get before it stops splitting the gap, and
+# how many splits it is allowed. The gap halves each time, so the cap is only
+# there to bound the work if a bulletin ever makes the search behave oddly.
+_PAYOUT_PRECISION = 0.01
+_PAYOUT_BISECTIONS = 24
+
+
+def _richest_coupon(
+    pool: list[Leg],
+    exclude_events: set[int],
+    min_prob: float,
+    min_expected_value: float | None = None,
+) -> Coupon | None:
+    """Best-paying coupon that still lands at least ``min_prob`` of the time.
+
+    The other two coupons pin the payout and ask for the likeliest build that
+    reaches it. This one pins the chance of landing and asks for the biggest
+    payout that survives it - the same frontier, approached from the other
+    end, which is why nothing about the shape of the coupon is prescribed
+    here either.
+
+    Leg count in particular is not chosen. ``_best_coupon`` returns the
+    likeliest build at whatever payout it is given, and the likeliest build at
+    a payout is the one carrying the fewest margins, so how many matches the
+    coupon spans falls out of the arithmetic rather than out of a rule.
+
+    Raising the payout floor can only shrink what the search may pick from, so
+    the best probability it can reach never rises with it. That makes the
+    answer bracketable: the floor is doubled until it is out of reach, then
+    the gap is halved until it closes.
+    """
+
+    def reaching(floor: float) -> Coupon | None:
+        coupon = _best_coupon(pool, exclude_events, floor, min_expected_value)
+        if coupon is None or coupon.combined_prob < min_prob:
+            return None
+        return coupon
+
+    best = reaching(1.0)
+    if best is None:
+        return None
+    # Every payout up to ``low`` is known to be reachable; ``high`` is the
+    # first one found not to be.
+    low = best.total_odds
+    ceiling = config.LEG_MAX_ODD**config.DAILY_MAX_LEGS
+    high = None
+    probe = low * 2
+    while probe <= ceiling:
+        found = reaching(probe)
+        if found is None:
+            high = probe
+            break
+        best = found
+        low = max(probe, found.total_odds)
+        probe = low * 2
+    if high is None:
+        return best
+    for _ in range(_PAYOUT_BISECTIONS):
+        if high - low < _PAYOUT_PRECISION:
+            break
+        middle = (low + high) / 2
+        found = reaching(middle)
+        if found is None:
+            high = middle
+        else:
+            best = found
+            low = max(middle, found.total_odds)
+    return best
+
+
 def build_daily_coupons(
     events: list[NormalizedEvent],
     now: datetime | None = None,
@@ -319,12 +395,17 @@ def build_daily_coupons(
     min_expected_value: float | None = None,
     main_min_odds: float | None = None,
     alt_min_odds: float | None = None,
+    mix_min_prob: float | None = None,
+    with_mix: bool = True,
 ) -> dict[str, Coupon | None]:
-    """Return {'main': Coupon|None, 'alt': Coupon|None} for the given bulletin."""
+    """Return {'main': ..., 'alt': ..., 'mix': ...} for the given bulletin."""
     main_floor = (
         config.DAILY_MAIN_MIN_ODDS if main_min_odds is None else main_min_odds
     )
     alt_floor = config.DAILY_ALT_MIN_ODDS if alt_min_odds is None else alt_min_odds
+    mix_floor = (
+        config.DAILY_MIX_MIN_PROB if mix_min_prob is None else mix_min_prob
+    )
     now = now or datetime.now(tz=config.TIMEZONE)
     now_ts = int(now.timestamp())
     end_of_today = now.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -352,4 +433,19 @@ def build_daily_coupons(
     )
     if alt:
         alt.kind = "daily_alt"
-    return {"main": main, "alt": alt}
+    spoken_for = (main.event_ids if main else set()) | (
+        alt.event_ids if alt else set()
+    )
+    mix = (
+        _richest_coupon(
+            pool,
+            exclude_events=spoken_for,
+            min_prob=mix_floor,
+            min_expected_value=min_expected_value,
+        )
+        if with_mix
+        else None
+    )
+    if mix:
+        mix.kind = "daily_mix"
+    return {"main": main, "alt": alt, "mix": mix}

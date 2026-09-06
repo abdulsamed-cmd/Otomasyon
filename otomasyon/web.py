@@ -26,6 +26,7 @@ from .storage import Database
 KIND_LABELS = {
     "daily_main": "Günlük ana",
     "daily_alt": "Günlük alternatif",
+    "daily_mix": "Günlük karma",
     "surprise": "Sürpriz",
 }
 
