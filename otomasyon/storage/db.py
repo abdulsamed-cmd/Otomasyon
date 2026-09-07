@@ -137,6 +137,29 @@ class Database:
         self.conn.commit()
         return len(rows)
 
+    def _place_missing_competitions(self, events: list[NormalizedEvent]) -> None:
+        """Give every competition an event points at a row to point at.
+
+        The bulletin occasionally carries a fixture whose competition is absent
+        from the competition listing served alongside it. Without a row here the
+        event's foreign key fails and the whole capture is lost, taking the odds
+        for every other match of the day with it. A nameless placeholder keeps
+        the day's prices; the next listing that does carry the competition fills
+        the name in.
+        """
+        referenced = {
+            ev.competition_id
+            for ev in events
+            if ev.competition_id is not None and ev.competition_id != -1
+        }
+        if not referenced:
+            return
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO competitions (id, name, country_code)"
+            " VALUES (?, '', NULL)",
+            [(cid,) for cid in sorted(referenced)],
+        )
+
     def save_events(self, events: Iterable[NormalizedEvent], *, now: int | None = None) -> dict:
         """Upsert events, their markets/selections, and append odds snapshots.
 
@@ -146,6 +169,7 @@ class Database:
         events = list(events)
         cur = self.conn.cursor()
         stats = {"events": 0, "markets": 0, "selections": 0, "odds": 0}
+        self._place_missing_competitions(events)
         cur.execute(
             "INSERT INTO bulletin_captures (captured_ts) VALUES (?)", (now,)
         )

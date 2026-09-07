@@ -57,3 +57,11 @@ def test_reserve_suffixes_still_excluded():
 
 def test_sub_age_groups_are_excluded():
     assert team_exclusion_reason("Benfica Sub-23") is not None
+
+
+def test_a_competition_nobody_can_name_is_not_one_to_bet_on():
+    """A fixture the bulletin left unlabelled used to pass every rule by default."""
+    for nameless in ("", "   ", None):
+        assert not is_daily_eligible(nameless)
+        assert competition_exclusion_reason(nameless) == "unnamed competition"
+    assert not is_event_eligible("", "Chelsea", "Arsenal")

@@ -42,7 +42,14 @@ def _fold(text: str) -> str:
 
 
 def competition_exclusion_reason(name: str) -> str | None:
-    folded = _fold(name)
+    folded = _fold(name).strip()
+    # The token rules below can only speak for a competition they can read. A
+    # fixture whose competition is missing from the bulletin's listing arrives
+    # with a blank name, and every rule then passes it by default -- exactly
+    # backwards, since an unidentifiable competition is the last one the daily
+    # coupon should be running on.
+    if not folded:
+        return "unnamed competition"
     for token in _EXCLUDED_TOKENS:
         if token in folded:
             return f"excluded competition token: {token}"
