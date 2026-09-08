@@ -45,16 +45,38 @@ def get_live_events(force: bool = False):
     return _cache["events"], _cache["competitions"]
 
 
-def _build_daily(db_path: str):
-    """Build today's coupons without writing anything down."""
+def _build_daily(db_path: str, *, rebuild: bool = False):
+    """Build today's coupons without writing anything down.
+
+    Only part of a build tends to reach the record: a kind whose coupon has not
+    kicked off yet keeps the one it has. So the build is told both what the day
+    already stands on and which kinds can still be filed, or the part of it that
+    does get saved lands on a match another coupon is riding, and the kinds that
+    were never going to be saved spend the matches the open ones needed. A
+    rebuild retires the record first and so starts from the whole card.
+    """
     events, competitions = get_live_events()
     now = datetime.now(tz=config.TIMEZONE)
+    for_date = now.strftime("%Y-%m-%d")
+    spoken_for: set[int] = set()
+    slots = None
+    if not rebuild:
+        with Database(db_path) as db:
+            spoken_for = db.daily_events_spoken_for(for_date)
+            slots = [
+                _SLOT_OF_KIND[kind]
+                for kind in db.daily_kinds_open_for_a_coupon(
+                    for_date, now=int(now.timestamp())
+                )
+            ]
     coupons = engine.build_daily_coupons(
         events,
         now=now,
         probability_provider=calibrated_probability_provider(db_path),
+        exclude_events=spoken_for,
+        slots=slots,
     )
-    return coupons, events, competitions, now, now.strftime("%Y-%m-%d")
+    return coupons, events, competitions, now, for_date
 
 
 # A coupon is a ``kind`` once it is stored and a slot everywhere the engine and
@@ -175,7 +197,9 @@ def daily_text(
     reader how it did. `rebuild` replaces the record and is therefore answered
     with the replacement; `save=False` asks for a build on purpose and gets it.
     """
-    coupons, events, competitions, now, for_date = _build_daily(db_path)
+    coupons, events, competitions, now, for_date = _build_daily(
+        db_path, rebuild=rebuild
+    )
     if not save:
         return formatting.format_daily(as_record(coupons), for_date)
     _persist_daily(

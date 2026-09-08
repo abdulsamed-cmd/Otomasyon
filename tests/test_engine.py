@@ -78,6 +78,21 @@ def test_alternative_reaches_a_higher_payout_on_different_matches():
     assert alt.combined_prob < main.combined_prob
 
 
+def test_a_match_the_caller_has_already_committed_is_left_alone():
+    """Matches spoken for elsewhere are as unavailable as ones this build took."""
+    free = engine.build_daily_coupons(_events(), now=NOW)
+    taken = free["main"].event_ids
+
+    coupons = engine.build_daily_coupons(
+        _events(), now=NOW, exclude_events=set(taken)
+    )
+
+    for slot in ("main", "alt", "mix"):
+        coupon = coupons[slot]
+        if coupon is not None:
+            assert coupon.event_ids.isdisjoint(taken), slot
+
+
 def test_main_takes_the_likeliest_selection_that_clears_the_floor():
     main = engine.build_daily_coupons(_events(), now=NOW)["main"]
     # 1.60 is the cheapest price at or above the 1.50 floor, and therefore the

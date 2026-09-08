@@ -322,7 +322,7 @@ def _stub_build(monkeypatch, coupons, for_date):
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _path: (
+        lambda _path, **_: (
             coupons,
             [_event(1, kickoff), _event(2, kickoff)],
             COMPETITIONS,
@@ -385,7 +385,7 @@ def _stub_one(monkeypatch, *, event_id, kickoff, asked_at):
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _p: (
+        lambda _p, **_: (
             {"main": _coupon("daily_main", event_id, start_ts=start_ts), "alt": None},
             [_event(event_id, start_ts)],
             COMPETITIONS,

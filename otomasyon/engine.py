@@ -26,7 +26,9 @@ search is only shopping for the best price.
 
 No match is used twice in a day. The alternative reuses nothing from the main
 coupon and the mixed coupon reuses nothing from either, so the three land or
-fail on their own and the record can say which of them works.
+fail on their own and the record can say which of them works. A day can run
+this search more than once, as coupons kick off and what is left is built into
+follow-ups, so the caller passes in the matches earlier coupons already hold.
 
 Nothing here places bets - coupons are informational only.
 """
@@ -34,6 +36,7 @@ Nothing here places bets - coupons are informational only.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import combinations
@@ -388,6 +391,10 @@ def _richest_coupon(
     return best
 
 
+def _events_of(coupon: "Coupon | None") -> set[int]:
+    return coupon.event_ids if coupon else set()
+
+
 def build_daily_coupons(
     events: list[NormalizedEvent],
     now: datetime | None = None,
@@ -397,8 +404,18 @@ def build_daily_coupons(
     alt_min_odds: float | None = None,
     mix_min_prob: float | None = None,
     with_mix: bool = True,
+    exclude_events: set[int] | None = None,
+    slots: Iterable[str] | None = None,
 ) -> dict[str, Coupon | None]:
-    """Return {'main': ..., 'alt': ..., 'mix': ...} for the given bulletin."""
+    """Return {'main': ..., 'alt': ..., 'mix': ...} for the given bulletin.
+
+    The three coupons never share a match, so that a single result cannot
+    decide more than one of them. `exclude_events` extends that beyond the
+    build to matches the caller has already committed elsewhere, and `slots`
+    narrows it to the coupons the caller can still use: a slot left out takes
+    no match with it, which matters because the ones it would have taken are
+    exactly what the remaining slots have to choose from.
+    """
     main_floor = (
         config.DAILY_MAIN_MIN_ODDS if main_min_odds is None else main_min_odds
     )
@@ -417,35 +434,33 @@ def build_daily_coupons(
         until_ts = int((now + timedelta(hours=24)).timestamp())
         pool = _select_pool(events, now_ts, until_ts, probability_provider)
 
-    main = _best_coupon(
-        pool,
-        exclude_events=set(),
-        min_odds=main_floor,
-        min_expected_value=min_expected_value,
-    )
-    if main:
-        main.kind = "daily_main"
-    alt = _best_coupon(
-        pool,
-        exclude_events=main.event_ids if main else set(),
-        min_odds=alt_floor,
-        min_expected_value=min_expected_value,
-    )
-    if alt:
-        alt.kind = "daily_alt"
-    spoken_for = (main.event_ids if main else set()) | (
-        alt.event_ids if alt else set()
-    )
-    mix = (
-        _richest_coupon(
+    wanted = {"main", "alt", "mix"} if slots is None else set(slots)
+    taken = set(exclude_events or ())
+    built: dict[str, Coupon | None] = {"main": None, "alt": None, "mix": None}
+
+    if "main" in wanted:
+        built["main"] = _best_coupon(
             pool,
-            exclude_events=spoken_for,
+            exclude_events=taken,
+            min_odds=main_floor,
+            min_expected_value=min_expected_value,
+        )
+    if "alt" in wanted:
+        built["alt"] = _best_coupon(
+            pool,
+            exclude_events=taken | _events_of(built["main"]),
+            min_odds=alt_floor,
+            min_expected_value=min_expected_value,
+        )
+    if with_mix and "mix" in wanted:
+        built["mix"] = _richest_coupon(
+            pool,
+            exclude_events=taken | _events_of(built["main"]) | _events_of(built["alt"]),
             min_prob=mix_floor,
             min_expected_value=min_expected_value,
         )
-        if with_mix
-        else None
-    )
-    if mix:
-        mix.kind = "daily_mix"
-    return {"main": main, "alt": alt, "mix": mix}
+
+    for slot, kind in zip(("main", "alt", "mix"), config.DAILY_COUPON_KINDS):
+        if built[slot]:
+            built[slot].kind = kind
+    return built
