@@ -112,3 +112,35 @@ def test_replay_excludes_matches_started_before_daily_generation():
         [row], start_date="2026-03-10", end_date="2026-03-10"
     )
     assert report["main"]["coupons"] == 0
+
+
+def test_a_half_time_score_from_off_the_bulletin_is_not_handed_to_the_settler():
+    """The archive invents 0-0 half times for matches iddaa never listed.
+
+    Off the bulletin it reports a goalless first half for 73% of matches, and
+    for 68% of the ones that finished with four goals or more. Replaying a
+    half-of-match market against that would grade it off a scoreline the match
+    never had, so those rows must arrive without a half-time score at all.
+    """
+    from otomasyon.replay import historical_events
+
+    listed = _row(0, 3) | {"iddaa_code": 4321, "ht_home": 1, "ht_away": 0}
+    unlisted = _row(1, 3) | {"iddaa_code": None, "ht_home": 0, "ht_away": 0}
+
+    _, results = historical_events([listed, unlisted])
+
+    assert (results[1].ht_home, results[1].ht_away) == (1, 0)
+    assert (results[2].ht_home, results[2].ht_away) == (None, None)
+
+
+def test_a_full_time_market_is_still_graded_off_the_bulletin():
+    """Dropping the half-time score must not cost the row its other markets."""
+    from otomasyon.replay import historical_events
+    from otomasyon.settlement import settle_leg
+
+    unlisted = _row(0, 3) | {"iddaa_code": None}
+    _, results = historical_events([unlisted])
+    result = results[1]
+
+    assert settle_leg(*config.MARKET_OVER_UNDER, "2.5", "Üst", result) == "win"
+    assert settle_leg(*config.MARKET_HT_OVER_UNDER, "1.5", "Alt", result) == "void"

@@ -81,12 +81,21 @@ def historical_events(rows: list[dict]) -> tuple[list[NormalizedEvent], dict[int
                 markets=markets,
             )
         )
+        # The archive's half-time score is only real for matches that carried
+        # an iddaa code. Off the bulletin it reports 0.51 first-half goals
+        # against 3.14 at full time, calls 73% of matches goalless at half
+        # time, and does so for 68% of the matches that finished with four
+        # goals or more - it is a default standing in for a figure nobody
+        # recorded. Handing that to the settler would have it grade half-of-
+        # match markets off a scoreline the match never had, so those rows
+        # arrive without one and are left ungraded instead.
+        trustworthy_half = row.get("iddaa_code") is not None
         results[event_id] = MatchResult(
             event_id=event_id,
             ft_home=row["ft_home"],
             ft_away=row["ft_away"],
-            ht_home=row.get("ht_home"),
-            ht_away=row.get("ht_away"),
+            ht_home=row.get("ht_home") if trustworthy_half else None,
+            ht_away=row.get("ht_away") if trustworthy_half else None,
             status="final",
             source="historical_replay",
         )
