@@ -83,7 +83,7 @@ def _stub_build(monkeypatch, event_ids, *, at=None, kickoff=None, coupons=None):
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _path: (
+        lambda _path, **_: (
             coupons,
             [_event(eid, kick) for eid in event_ids],
             COMPETITIONS,

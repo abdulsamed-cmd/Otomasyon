@@ -137,6 +137,29 @@ class Database:
         self.conn.commit()
         return len(rows)
 
+    def _place_missing_competitions(self, events: list[NormalizedEvent]) -> None:
+        """Give every competition an event points at a row to point at.
+
+        The bulletin occasionally carries a fixture whose competition is absent
+        from the competition listing served alongside it. Without a row here the
+        event's foreign key fails and the whole capture is lost, taking the odds
+        for every other match of the day with it. A nameless placeholder keeps
+        the day's prices; the next listing that does carry the competition fills
+        the name in.
+        """
+        referenced = {
+            ev.competition_id
+            for ev in events
+            if ev.competition_id is not None and ev.competition_id != -1
+        }
+        if not referenced:
+            return
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO competitions (id, name, country_code)"
+            " VALUES (?, '', NULL)",
+            [(cid,) for cid in sorted(referenced)],
+        )
+
     def save_events(self, events: Iterable[NormalizedEvent], *, now: int | None = None) -> dict:
         """Upsert events, their markets/selections, and append odds snapshots.
 
@@ -146,6 +169,7 @@ class Database:
         events = list(events)
         cur = self.conn.cursor()
         stats = {"events": 0, "markets": 0, "selections": 0, "odds": 0}
+        self._place_missing_competitions(events)
         cur.execute(
             "INSERT INTO bulletin_captures (captured_ts) VALUES (?)", (now,)
         )
@@ -446,6 +470,26 @@ class Database:
             )
         return out
 
+    def daily_events_spoken_for(self, for_date: str) -> set[int]:
+        """Matches the day's coupons already stand on.
+
+        The day hands over several slips and they are meant to be independent
+        of one another, so a match one of them already rides is not free for
+        the next. Within a single build the engine sees to that itself, but a
+        follow-up is a fresh build that knows nothing of what is on record.
+        """
+        rows = self.conn.execute(
+            f"""
+            SELECT DISTINCT cl.event_id
+            FROM coupon_legs cl
+            JOIN coupons c ON c.id = cl.coupon_id
+            WHERE c.for_date=? AND c.status<>'superseded'
+              AND c.kind IN ({_DAILY_KIND_SLOTS})
+            """,
+            (for_date, *_DAILY_KINDS),
+        ).fetchall()
+        return {row["event_id"] for row in rows}
+
     def daily_coupon_kinds_played(self, for_date: str, *, now: int | None = None):
         """Kinds whose latest coupon has kicked off and can be followed up.
 
@@ -477,6 +521,40 @@ class Database:
             if start is not None and start <= now:
                 played.append(row["kind"])
         return played
+
+    def daily_kinds_open_for_a_coupon(self, for_date: str, *, now: int | None = None):
+        """Kinds a new coupon may still be filed under today.
+
+        A kind is open while it has nothing on record, and again once what it
+        has has kicked off and can only be followed up. In between it is closed,
+        and building it anyway is worse than wasteful: the coupon is refused on
+        the way in, but the matches it picked are already gone from the build
+        the open kinds have to share.
+        """
+        now = int(time.time()) if now is None else now
+        rows = self.conn.execute(
+            f"""
+            SELECT c.kind, MAX(c.id) AS id
+            FROM coupons c
+            WHERE c.for_date=? AND c.status<>'superseded'
+              AND c.kind IN ({_DAILY_KIND_SLOTS})
+            GROUP BY c.kind
+            """,
+            (for_date, *_DAILY_KINDS),
+        ).fetchall()
+        held = set()
+        for row in rows:
+            start = self.conn.execute(
+                """
+                SELECT MIN(e.start_ts) AS first_start
+                FROM coupon_legs cl LEFT JOIN events e ON e.id=cl.event_id
+                WHERE cl.coupon_id=?
+                """,
+                (row["id"],),
+            ).fetchone()["first_start"]
+            if start is None or start > now:
+                held.add(row["kind"])
+        return [kind for kind in _DAILY_KINDS if kind not in held]
 
     def supersede_daily_coupons(self, for_date: str, *, now: int | None = None) -> int:
         """Retire a day's still-pending daily coupons before they are replaced.

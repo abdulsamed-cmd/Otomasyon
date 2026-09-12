@@ -54,7 +54,7 @@ def _stub_build(monkeypatch, coupons, for_date="2026-08-09"):
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _path: (coupons, _events(), COMPETITIONS, NOW, for_date),
+        lambda _path, **_: (coupons, _events(), COMPETITIONS, NOW, for_date),
     )
 
 
@@ -130,7 +130,7 @@ def _pair_at(event_id: int, start_ts: int):
 def _stub_pair(monkeypatch, *, event_id, start_ts, for_date, built_at, builds=None):
     coupons = _pair_at(event_id, start_ts)
 
-    def build(_path):
+    def build(_path, **_):
         if builds is not None:
             builds.append(event_id)
         return coupons, [_event_at(event_id, start_ts)], COMPETITIONS, built_at, for_date
@@ -256,7 +256,7 @@ def test_a_kind_with_nothing_to_offer_gains_rather_than_replaces(
     monkeypatch.setattr(
         service,
         "_build_daily",
-        lambda _p: (only_main, [_event_at(1, lunchtime_kickoff)], COMPETITIONS, morning, day),
+        lambda _p, **_: (only_main, [_event_at(1, lunchtime_kickoff)], COMPETITIONS, morning, day),
     )
     assert service.push_daily(path, telegram, now=morning) == "123"
     assert service.coupons_of_record(path, day)["alt"] == []
